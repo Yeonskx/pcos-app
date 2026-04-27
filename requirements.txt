@@ -2,7 +2,7 @@ streamlit
 numpy
 pandas
 imbalanced-learn
-scikit-learn
+scikit-learn==1.7.2
 plotly
 xgboost
 shap
