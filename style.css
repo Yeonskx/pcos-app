@@ -530,7 +530,6 @@ h4 {
    DASHBOARD STYLES
 ══════════════════════════════════════════════════ */
 
-/* Section label (dashboard sections) */
 .dash-section-label {
   font-size: 0.62rem;
   text-transform: uppercase;
@@ -541,7 +540,6 @@ h4 {
   margin-top: 0.25rem;
 }
 
-/* Dashboard card */
 .dash-card {
   background: #ffffff;
   border: 1px solid #ded5f0;
@@ -560,7 +558,6 @@ h4 {
   border-bottom: 1px solid #f0ebfa;
 }
 
-/* KPI strip */
 .kpi-card {
   background: #ffffff;
   border: 1px solid #ded5f0;
@@ -584,7 +581,6 @@ h4 {
   line-height: 1.1;
 }
 
-/* Risk flag rows */
 .risk-row {
   margin-bottom: 1rem;
 }
@@ -625,7 +621,6 @@ h4 {
   letter-spacing: 0.01em;
 }
 
-/* SHAP legend */
 .shap-legend {
   background: #f8f5fe;
   border: 1px solid #e0d5f5;
@@ -687,7 +682,6 @@ h4 {
   font-weight: 600;
 }
 
-/* Patient data summary */
 .summary-section-label {
   font-size: 0.62rem;
   text-transform: uppercase;
@@ -722,4 +716,395 @@ h4 {
   font-size: 0.87rem;
   font-weight: 600;
   color: #1e1040;
+}
+
+/* ══════════════════════════════════════════════════
+   OVERVIEW PAGE STYLES
+══════════════════════════════════════════════════ */
+
+/* Shared typography helpers */
+.ov-eyebrow {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-weight: 600;
+  color: #9580b8;
+  margin-bottom: 0.35rem;
+}
+
+.ov-section-title {
+  font-family: "Cormorant Garamond", serif;
+  font-size: 1.55rem;
+  font-weight: 600;
+  color: #1e1040;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin-bottom: 0.8rem;
+}
+
+/* Hero card */
+.ov-hero {
+  background: #ffffff;
+  border: 1px solid #ded5f0;
+  border-radius: 16px;
+  padding: 2rem 2.2rem 2rem;
+  margin-bottom: 1.2rem;
+  position: relative;
+  overflow: hidden;
+}
+.ov-hero-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #7c52cc, #b08af5, #7c52cc);
+}
+.ov-hero-inner {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+.ov-hero-icon {
+  width: 46px;
+  height: 46px;
+  background: #1a0e36;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.25rem;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.ov-hero-title {
+  font-family: "Cormorant Garamond", serif;
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: #1e1040;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin-bottom: 0.5rem;
+}
+.ov-hero-lead {
+  font-size: 0.85rem;
+  color: #4a3a6e;
+  line-height: 1.75;
+  margin-bottom: 1rem;
+}
+
+/* Stat chips */
+.ov-stat-row {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.2rem;
+}
+.ov-stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.8rem;
+  background: #f5f0fe;
+  border: 1px solid #e0d5f5;
+  border-radius: 8px;
+}
+.ov-stat-val {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #1e1040;
+  font-family: "Cormorant Garamond", serif;
+  letter-spacing: -0.01em;
+}
+.ov-stat-label {
+  font-size: 0.68rem;
+  color: #9580b8;
+  letter-spacing: 0.01em;
+}
+
+/* Rotterdam criteria grid */
+.ov-rotterdam-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.65rem;
+  margin-bottom: 0.85rem;
+}
+.ov-rotterdam-item {
+  background: #f8f5fe;
+  border: 1px solid #ede6f5;
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+}
+.ov-rotterdam-num {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #9580b8;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.ov-rotterdam-num::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #9580b8;
+  flex-shrink: 0;
+}
+.ov-rotterdam-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #1e1040;
+  margin-bottom: 0.3rem;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+.ov-rotterdam-desc {
+  font-size: 0.75rem;
+  color: #7a6aa0;
+  line-height: 1.6;
+}
+
+/* Rotterdam rule callout */
+.ov-rotterdam-rule {
+  background: #f5f0fe;
+  border: 1px solid #ddd0f5;
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.75rem;
+  color: #4a3a6e;
+  line-height: 1.6;
+}
+
+/* Why box / generic content box */
+.ov-box {
+  background: #ffffff;
+  border: 1px solid #ded5f0;
+  border-radius: 16px;
+  padding: 1.8rem 2.2rem;
+  margin-bottom: 1.2rem;
+}
+.ov-box-title {
+  font-family: "Cormorant Garamond", serif;
+  font-size: 1.55rem;
+  font-weight: 600;
+  color: #1e1040;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin-bottom: 0.6rem;
+}
+.ov-box-body {
+  font-size: 0.85rem;
+  color: #4a3a6e;
+  line-height: 1.75;
+  margin: 0;
+}
+.ov-inline-pill {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 20px;
+  background: #f0ebfc;
+  border: 1px solid #ddd0f5;
+  color: #5a38b0;
+  vertical-align: middle;
+  margin: 0 2px;
+  letter-spacing: 0.02em;
+}
+
+/* Severity spectrum bar */
+.ov-severity-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.ov-sev-label {
+  font-size: 0.7rem;
+  color: #9580b8;
+  white-space: nowrap;
+}
+.ov-sev-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    #7c52cc 0%,
+    #b83232 28%,
+    #1a6e3c 60%,
+    #9a7010 100%
+  );
+  position: relative;
+}
+.ov-sev-badges {
+  display: flex;
+  justify-content: space-between;
+  position: absolute;
+  top: -8px;
+  left: 2%;
+  right: 2%;
+  pointer-events: none;
+}
+.ov-sev-badge {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Cormorant Garamond", serif;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: white;
+  border: 2px solid #eeeaf5;
+}
+
+/* Phenotype cards */
+.ov-ph-card {
+  background: #ffffff;
+  border: 1px solid #ded5f0;
+  border-radius: 14px;
+  padding: 1.5rem 1.6rem;
+  margin-bottom: 0.85rem;
+  position: relative;
+  overflow: hidden;
+  height: 100%;
+}
+.ov-ph-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+}
+.ov-ph-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  margin-bottom: 0.9rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid #f0ebfa;
+}
+.ov-ph-badge {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Cormorant Garamond", serif;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: white;
+  flex-shrink: 0;
+}
+.ov-ph-label {
+  font-family: "Cormorant Garamond", serif;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #1e1040;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  margin-bottom: 3px;
+}
+.ov-ph-combo {
+  font-size: 0.7rem;
+  color: #9580b8;
+  line-height: 1.45;
+}
+.ov-ph-desc {
+  font-size: 0.82rem;
+  color: #4a3a6e;
+  line-height: 1.7;
+  margin-bottom: 0.85rem;
+}
+.ov-ph-features {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.85rem;
+}
+.ov-ph-feat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: #4a3a6e;
+  line-height: 1.45;
+}
+.ov-ph-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ov-ph-note {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.45rem 0.8rem;
+  border-radius: 7px;
+  line-height: 1.4;
+}
+
+/* How it works 3-column grid */
+.ov-how-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.2rem;
+}
+.ov-how-num {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  background: #1a0e36;
+  border-radius: 8px;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #b08af5;
+  margin-bottom: 0.7rem;
+  letter-spacing: 0.02em;
+}
+.ov-how-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #1e1040;
+  margin-bottom: 0.4rem;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+.ov-how-body {
+  font-size: 0.8rem;
+  color: #6a5a90;
+  line-height: 1.7;
+  margin: 0;
+}
+.ov-how-tag {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 5px;
+  margin-top: 0.6rem;
+  border: 1px solid transparent;
+  letter-spacing: 0.02em;
+}
+
+/* Disclaimer */
+.ov-disclaimer {
+  background: #fffcf0;
+  border: 1px solid #f0dfa0;
+  border-radius: 10px;
+  padding: 0.9rem 1.1rem;
+  margin-bottom: 1.4rem;
+  font-size: 0.74rem;
+  color: #6b4e10;
+  line-height: 1.65;
 }
