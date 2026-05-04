@@ -29,6 +29,15 @@ def load_css(filepath):
 
 load_css("style.css")
 
+import base64
+
+def img_b64(path):
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+OVARY_IMG = img_b64("ovarian_morphology.jpg")
+PHENOTYPES_IMG = img_b64("phenotypes.jpg")
+
 # ─────────────────────────────────────────────────────────
 # INJECT FIXES
 # ─────────────────────────────────────────────────────────
@@ -48,6 +57,38 @@ document.addEventListener('keydown', function(e) {
 }, true);
 </script>
 """, unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────
+# ROTTERDAM RULE-BASED PCOS DETECTION
+# ─────────────────────────────────────────────────────────
+# Three Rotterdam criteria:
+#   OA  = Oligo/Anovulation      → irregular cycle
+#   HA  = Hyperandrogenism       → hair growth OR pimples/acne
+#   PCO = Polycystic Ovaries     → follicle no. (L) ≥ 12 OR follicle no. (R) ≥ 12
+#
+# NOTE: skin darkening removed from form (not in TOMIM-25).
+# HA is now: hair_growth OR pimples only.
+
+def evaluate_rotterdam(inp):
+    oa  = bool(inp.get("cycle_ri", 0))
+    ha  = bool(
+        inp.get("hair growth (1/0)", 0)
+        or inp.get("pimples (1/0)", 0)
+        or inp.get("skin darkening (1/0)", 0)
+    )
+    fl  = inp.get("follicle no. (l)", 0) or 0
+    fr  = inp.get("follicle no. (r)", 0) or 0
+    pco = (fl >= 12) or (fr >= 12)
+    return oa, ha, pco
+
+
+def classify_phenotype_rule(oa, ha, pco):
+    if   oa and ha and pco: return "A"
+    elif oa and ha:          return "B"
+    elif ha and pco:         return "C"
+    elif oa and pco:         return "D"
+    else:                    return None
+
 
 # ─────────────────────────────────────────────────────────
 # PHENOTYPE INFO
@@ -79,31 +120,17 @@ PHENOTYPE_INFO = {
     },
 }
 
-NORMAL_RANGES = {
-    "BMI":          (18.5, 24.9, "kg/m²"),
-    "AMH":          (1.0,  3.5,  "ng/mL"),
-    "FSH":          (3.0,  10.0, "mIU/mL"),
-    "LH":           (2.0,  15.0, "mIU/mL"),
-    "FSH/LH":       (1.0,  3.0,  "ratio"),
-    "TSH":          (0.4,  4.0,  "mIU/L"),
-    "PRL":          (2.0,  29.0, "ng/mL"),
-    "Hemoglobin":   (12.0, 16.0, "g/dl"),
-    "Vitamin D3":   (20.0, 50.0, "ng/mL"),
-    "Progesterone": (1.0,  25.0, "ng/mL"),
-    "RBS":          (70.0, 140.0,"mg/dl"),
-    "Waist:Hip":    (0.0,  0.85, "ratio"),
-}
-
 # ─────────────────────────────────────────────────────────
 # SESSION STATE INIT
 # ─────────────────────────────────────────────────────────
+# Sections: anthropometric, vitals, menstrual, labs, ultrasound, symptoms
 SECTIONS = ["anthropometric", "vitals", "menstrual", "labs", "ultrasound", "symptoms"]
 SECTION_LABELS = {
     "anthropometric": ("01", "Anthropometric Measurements", "Height, weight, BMI, body ratios"),
     "vitals":         ("02", "Vitals",                      "Pulse and blood pressure"),
     "menstrual":      ("03", "Menstrual & Reproductive History", "Cycle regularity, pregnancy history"),
-    "labs":           ("04", "Laboratory Values",           "Hormones, blood markers"),
-    "ultrasound":     ("05", "Ultrasound Findings",         "Follicle count and size, endometrium"),
+    "labs":           ("04", "Laboratory Values",           "Beta-HCG I, AMH, Random Blood Sugar"),
+    "ultrasound":     ("05", "Ultrasound Findings",         "Follicle count (left & right ovary)"),
     "symptoms":       ("06", "Clinical Symptoms",           "Self-reported signs and lifestyle"),
 }
 
@@ -113,6 +140,7 @@ DEFAULTS = {
     "app_step": "overview",
     "pcos_result": None,
     "phenotype_result": None,
+    "rotterdam_flags": None,
     "inputs": {},
 }
 for k, v in DEFAULTS.items():
@@ -150,66 +178,77 @@ class TOMIMSelector(BaseEstimator, TransformerMixin):
 # ─────────────────────────────────────────────────────────
 @st.cache_resource
 def load_models():
-    p1 = pickle.load(open("p1_model.pkl", "rb"))
     p2 = pickle.load(open("p2_model.pkl", "rb"))
-    p1_features = pickle.load(open("p1_features.pkl", "rb"))
-    return p1, p2, p1_features
+    return p2
 
-p1_model, p2_model, P1_FEATURES = load_models()
+p2_model = load_models()
+
+# ─────────────────────────────────────────────────────────
+# 26 TOMIM FEATURES (P2)
+# ─────────────────────────────────────────────────────────
+P2_FEATURES = [
+    "age",
+    "weight",
+    "height",
+    "bmi",
+    "blood group",
+    "pulse rate (bpm)",
+    "cycle (2/4)",
+    "marraige status (yrs)",
+    "pregnant (1/0)",
+    "no. of abortions",
+    "i   beta-hcg(miu/ml)",
+    "hip (inch)",
+    "waist (inch)",
+    "waist:hip ratio",
+    "amh (ng/ml)",
+    "rbs (mg/dl)",
+    "skin darkening (1/0)",
+    "weight gain (1/0)",
+    "hair growth (1/0)",
+    "pimples (1/0)",
+    "fast food (1/0)",
+    "reg.exercise (1/0)",
+    "bp _systolic (mmhg)",
+    "bp _diastolic (mmhg)",
+    "follicle no. (l)",
+    "follicle no. (r)",
+]
 
 # ─────────────────────────────────────────────────────────
 # PREDICTIONS
 # ─────────────────────────────────────────────────────────
-P2_FEATURES = [
-    "age", "weight", "height", "bmi", "blood group",
-    "pulse rate (bpm)", "cycle (2/4)", "marraige status (yrs)",
-    "pregnant (1/0)", "no. of abortions", "i   beta-hcg(miu/ml)",
-    "hip (inch)", "waist (inch)", "waist:hip ratio",
-    "amh (ng/ml)", "rbs (mg/dl)", "weight gain (1/0)",
-    "hair growth (1/0)", "skin darkening (1/0)", "pimples (1/0)",
-    "fast food (1/0)", "reg.exercise (1/0)",
-    "bp _systolic (mmhg)", "bp _diastolic (mmhg)",
-    "follicle no. (l)", "follicle no. (r)",
-]
-
-def predict_pcos(inp):
-    X = pd.DataFrame([[inp.get(c, np.nan) for c in P1_FEATURES]], columns=P1_FEATURES)
-    prob = p1_model.predict_proba(X)[0]
-    positive_class_index = list(p1_model.classes_).index(1)
-    return prob[positive_class_index] >= 0.5
-
 def predict_phenotype(inp):
     X = np.array([[inp.get(c, np.nan) for c in P2_FEATURES]])
     probs_arr = p2_model.predict_proba(X)[0]
-    probs = {c: round(float(p), 3) for c, p in zip(["A","B","C","D"], probs_arr)}
+    probs = {c: round(float(p), 3) for c, p in zip(["A", "B", "C", "D"], probs_arr)}
     return max(probs, key=probs.get), probs
+
 
 def compute_shap_values(inp):
     try:
-        model    = p1_model.named_steps["model"]
-        selector = p1_model.named_steps["selector"]
-        selected_names = [P1_FEATURES[i] for i in selector.selected_idx_]
-        booster    = model.get_booster()
-        importance = booster.get_score(importance_type="gain")
+        model    = p2_model.named_steps["clf"]       # RandomForestClassifier
+        selector = p2_model.named_steps["tomim"]     # TOMIMSelector
+
+        selected_names = [P2_FEATURES[i] for i in selector.selected_idx_]
+
+        # RandomForest uses feature_importances_ (Gini importance), not get_booster()
+        importances = model.feature_importances_
+
         scores = {}
-        for fname, score in importance.items():
-            try:
-                idx = int(fname.replace("f", ""))
-                if idx < len(selected_names):
-                    scores[selected_names[idx]] = float(score)
-            except ValueError:
-                if fname in selected_names:
-                    scores[fname] = float(score)
-        for name in selected_names:
-            if name not in scores:
-                scores[name] = 0.0
+        for i, name in enumerate(selected_names):
+            if i < len(importances):
+                scores[name] = float(importances[i])
+
         return scores, None
+
     except Exception:
         return None, traceback.format_exc()
 
+
 def reset():
     for k, v in DEFAULTS.items():
-        st.session_state[k] = v
+        st.session_state[k] = v if not isinstance(v, dict) else {}
 
 # ─────────────────────────────────────────────────────────
 # SIDEBAR HELPERS
@@ -228,7 +267,7 @@ def _nav_row(num, label, state):
         f'</div>'
     )
 
-def _pipeline_stages(p1_state, p2_state, dash_state="locked"):
+def _pipeline_stages(rule_state, p2_state, dash_state="locked"):
     def stage(num, title, desc, state):
         css = f"pipeline-stage stage-{state}"
         check = CHECK if state == "done" else ""
@@ -242,10 +281,10 @@ def _pipeline_stages(p1_state, p2_state, dash_state="locked"):
             f'{check}'
             f'</div>'
         )
-    html = '<div class="pipeline-label">ML Pipelines</div>'
-    html += stage("P1", "PCOS Detection",          "Binary positive / negative", p1_state)
-    html += stage("P2", "Phenotype Classification", "Types A / B / C / D",       p2_state)
-    html += stage("DB", "Clinical Dashboard",       "Charts, SHAP & summary",     dash_state)
+    html = '<div class="pipeline-label">Diagnostic Pipeline</div>'
+    html += stage("R1", "Rotterdam Rules",          "Criteria-based PCOS detection", rule_state)
+    html += stage("P2", "Phenotype Classification", "Types A / B / C / D",           p2_state)
+    html += stage("DB", "Clinical Dashboard",       "Charts, importance & summary",  dash_state)
     st.markdown(html, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────
@@ -253,7 +292,7 @@ def _pipeline_stages(p1_state, p2_state, dash_state="locked"):
 # ─────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown('<div class="sidebar-title">PCOS Diagnostic Tool</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sidebar-subtitle">ML-Powered Clinical Assistant</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-subtitle">Rule-Based + ML Clinical Assistant</div>', unsafe_allow_html=True)
 
     app_step   = st.session_state.app_step
     active_sec = st.session_state.active_section
@@ -273,9 +312,9 @@ with st.sidebar:
     for i, sec in enumerate(SECTIONS):
         num, label, _ = SECTION_LABELS[sec]
         if app_step == "form":
-            if i == active_sec:   state = "active"
-            elif i < active_sec:  state = "done"
-            else:                 state = "locked"
+            if i == active_sec:  state = "active"
+            elif i < active_sec: state = "done"
+            else:                state = "locked"
         elif app_step == "overview":
             state = "locked"
         else:
@@ -286,15 +325,17 @@ with st.sidebar:
     st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
 
     if app_step == "overview":
-        _pipeline_stages(p1_state="locked", p2_state="locked", dash_state="locked")
+        _pipeline_stages(rule_state="locked", p2_state="locked", dash_state="locked")
     elif app_step == "form":
-        _pipeline_stages(p1_state="locked", p2_state="locked", dash_state="locked")
-    elif app_step == "pcos_result":
-        _pipeline_stages(p1_state="active", p2_state="locked", dash_state="locked")
-    elif app_step == "phenotype_result":
-        _pipeline_stages(p1_state="done",   p2_state="active", dash_state="locked")
+        _pipeline_stages(rule_state="locked", p2_state="locked", dash_state="locked")
+    elif app_step == "result":
+        pcos_pos = st.session_state.pcos_result
+        if pcos_pos:
+            _pipeline_stages(rule_state="done", p2_state="done", dash_state="locked")
+        else:
+            _pipeline_stages(rule_state="active", p2_state="locked", dash_state="locked")
     elif app_step == "dashboard":
-        _pipeline_stages(p1_state="done",   p2_state="done",   dash_state="active")
+        _pipeline_stages(rule_state="done", p2_state="done", dash_state="active")
 
     st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
 
@@ -318,10 +359,12 @@ elif app_step == "form":
         <p>{desc} &nbsp;&middot;&nbsp; Fill in the fields below and click <strong>Next</strong> to continue.</p>
     </div>
     """, unsafe_allow_html=True)
-elif app_step == "pcos_result":
-    st.markdown('<div class="main-header"><h1>PCOS Detection Result</h1><p>Based on all entered clinical data.</p></div>', unsafe_allow_html=True)
-elif app_step == "phenotype_result":
-    st.markdown('<div class="main-header"><h1>Phenotype Classification Result</h1><p>PCOS confirmed — classifying phenotype.</p></div>', unsafe_allow_html=True)
+elif app_step == "result":
+    pcos_pos = st.session_state.pcos_result
+    if pcos_pos:
+        st.markdown('<div class="main-header"><h1>PCOS Detected — Phenotype Classification</h1><p>Rotterdam criteria confirmed PCOS. The ML model has classified the phenotype below.</p></div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="main-header"><h1>PCOS Detection Result</h1><p>Based on Rotterdam criteria applied to all entered clinical data.</p></div>', unsafe_allow_html=True)
 elif app_step == "dashboard":
     st.markdown('<div class="main-header"><h1>Clinical Dashboard</h1><p>Full diagnostic summary, biomarker analysis, and model explainability.</p></div>', unsafe_allow_html=True)
 
@@ -330,10 +373,9 @@ elif app_step == "dashboard":
 # ─────────────────────────────────────────────────────────
 if app_step == "overview":
 
-    # ── Hero ─────────────────────────────────────────────
     rotterdam_criteria = [
         ("1", "Oligo / Anovulation",  "Irregular or absent menstrual cycles due to infrequent or absent ovulation"),
-        ("2", "Hyperandrogenism",      "Elevated androgens — assessed clinically (acne, hirsutism) or biochemically"),
+        ("2", "Hyperandrogenism",      "Elevated androgens — assessed clinically (acne, hirsutism, skin darkening) or biochemically"),
         ("3", "Polycystic Ovaries",    "&ge;12 follicles per ovary or ovarian volume &gt;10 mL on ultrasound"),
     ]
     rotterdam_html = ""
@@ -365,7 +407,16 @@ if app_step == "overview":
         '<div class="ov-stat-chip"><span class="ov-stat-val">Rotterdam 2003</span><span class="ov-stat-label">diagnostic standard</span></div>'
         '<div class="ov-stat-chip"><span class="ov-stat-val">4 phenotypes</span><span class="ov-stat-label">clinical subtypes</span></div>'
         '</div>'
-        '<div class="ov-rotterdam-grid">' + rotterdam_html + '</div>'
+        f'<div style="margin:1.2rem 0 1rem;border-radius:12px;overflow:hidden;border:1px solid #ded5f0;'
+        f'box-shadow:0 4px 24px rgba(108,63,197,0.10);position:relative;">'
+        f'<div style="position:absolute;top:0;left:0;right:0;height:3px;'
+        f'background:linear-gradient(90deg,#7c52cc,#b08af5,#7c52cc);"></div>'
+        f'<img src="data:image/jpeg;base64,{OVARY_IMG}" style="width:100%;display:block;" />'
+        f'<div style="padding:0.55rem 0.9rem;background:#faf8fe;border-top:1px solid #ede6f5;">'
+        f'<span style="font-size:0.65rem;color:#9580b8;font-weight:600;letter-spacing:0.1em;'
+        f'text-transform:uppercase;">Fig. 1 — Normal vs. Polycystic Ovarian Morphology</span>'
+        f'</div>'
+        f'</div>'
         '<div class="ov-rotterdam-rule">'
         '<strong>Rotterdam criteria</strong> &mdash; at least <strong>2 of the 3</strong> features above '
         'must be present for diagnosis. Other causes of hyperandrogenism must be excluded prior to classification.'
@@ -376,7 +427,6 @@ if app_step == "overview":
     )
     st.markdown(hero_html, unsafe_allow_html=True)
 
-    # ── Why phenotypes ───────────────────────────────────
     st.markdown(
         '<div class="ov-box">'
         '<div class="ov-eyebrow">Clinical relevance</div>'
@@ -388,16 +438,17 @@ if app_step == "overview":
         'and treatment approach.'
         '</p>'
         '<p class="ov-box-body" style="margin-top:0.7rem;">'
-        'This tool uses a two-stage ML pipeline: <span class="ov-inline-pill">Pipeline 1</span> determines '
-        'whether the entered clinical data is consistent with a PCOS diagnosis, then '
-        '<span class="ov-inline-pill">Pipeline 2</span> classifies which phenotype applies &mdash; with '
-        'confidence scores and a full clinical dashboard.'
+        'This tool uses a <strong>two-stage approach</strong>: '
+        '<span class="ov-inline-pill">Stage 1 — Rotterdam Rules</span> applies the official clinical '
+        'criteria to determine whether PCOS is present and which phenotype best fits the data. '
+        '<span class="ov-inline-pill">Stage 2 — ML Model</span> then confirms and refines the '
+        'phenotype classification using a trained XGBoost pipeline, with confidence scores and a '
+        'full clinical dashboard.'
         '</p>'
         '</div>',
         unsafe_allow_html=True
     )
 
-    # ── Severity bar ─────────────────────────────────────
     st.markdown(
         '<div style="margin-bottom:0.9rem;">'
         '<div class="ov-eyebrow">Rotterdam classification</div>'
@@ -419,7 +470,20 @@ if app_step == "overview":
         unsafe_allow_html=True
     )
 
-    # ── Phenotype cards ───────────────────────────────────
+    st.markdown(
+        f'<div style="margin:0.4rem 0 1.2rem;border-radius:12px;overflow:hidden;border:1px solid #ded5f0;'
+        f'box-shadow:0 4px 24px rgba(108,63,197,0.10);position:relative;">'
+        f'<div style="position:absolute;top:0;left:0;right:0;height:3px;'
+        f'background:linear-gradient(90deg,#7c52cc,#b08af5,#7c52cc);"></div>'
+        f'<img src="data:image/jpeg;base64,{PHENOTYPES_IMG}" style="width:100%;display:block;" />'
+        f'<div style="padding:0.55rem 0.9rem;background:#faf8fe;border-top:1px solid #ede6f5;">'
+        f'<span style="font-size:0.65rem;color:#9580b8;font-weight:600;letter-spacing:0.1em;'
+        f'text-transform:uppercase;">Fig. 2 — Rotterdam Phenotype Classification (A–D)</span>'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+
     ph_data = [
         ("A", "#7c52cc", "rgba(124,82,204,0.08)", "#5a38b0",
          "Full Classic PCOS",
@@ -429,23 +493,23 @@ if app_step == "overview":
           "Polycystic ovarian morphology on ultrasound", "LH and AMH frequently elevated"],
          "Highest associated metabolic risk &middot; All 3 criteria met"),
         ("B", "#b83232", "rgba(184,50,50,0.08)", "#8a2020",
-         "Classic without PCO",
+         "Classic without PCOS",
          "Anovulation + Hyperandrogenism &middot; Normal ovarian morphology",
-         "Cycle irregularity and androgen excess are present, but ovarian morphology on ultrasound is within normal limits. Biochemical workup is required for identification.",
+         "Cycle irregularity and androgen excess are present, but ovarian morphology on ultrasound is within normal limits.",
          ["Irregular or absent menstrual cycles", "Clinical or biochemical hyperandrogenism",
           "Normal ovarian morphology on ultrasound", "Biochemical workup required for diagnosis"],
          "Elevated metabolic risk &middot; No polycystic morphology"),
         ("C", "#1a6e3c", "rgba(26,110,60,0.08)", "#0e4c28",
          "Ovulatory PCOS",
          "Hyperandrogenism + Polycystic Ovaries &middot; Regular cycles",
-         "Ovulation is preserved despite androgen excess and polycystic ovarian morphology. May be identified only through ultrasound and androgen testing in the absence of cycle irregularity.",
+         "Ovulation is preserved despite androgen excess and polycystic ovarian morphology.",
          ["Regular menstrual cycles", "Clinical or biochemical hyperandrogenism",
           "Polycystic ovarian morphology on ultrasound", "Fertility often preserved"],
          "Lower metabolic risk &middot; Ovulation preserved"),
         ("D", "#9a7010", "rgba(154,112,16,0.08)", "#6b4e08",
          "Non-Androgenic PCOS",
          "Anovulation + Polycystic Ovaries &middot; No hyperandrogenism",
-         "Cycle irregularity and polycystic ovarian morphology are present, but androgen levels are within normal limits. This phenotype is the subject of ongoing debate in the literature.",
+         "Cycle irregularity and polycystic ovarian morphology are present, but androgen levels are within normal limits.",
          ["Irregular or absent menstrual cycles", "Normal androgen levels (clinical and biochemical)",
           "Polycystic ovarian morphology on ultrasound", "Androgen-related symptoms absent"],
          "Lowest associated metabolic risk &middot; Classification debated"),
@@ -480,17 +544,16 @@ if app_step == "overview":
             )
             st.markdown(card_html, unsafe_allow_html=True)
 
-    # ── How this tool works ──────────────────────────────
     steps_data = [
         ("01", "Enter clinical data",
-         "Six sections: anthropometrics, vitals, menstrual history, laboratory values, ultrasound findings, and reported symptoms.",
-         "~5 min to complete", "#f5f0fe", "#7a5caa", "#ddd0f5"),
-        ("P1", "PCOS detection",
-         "An XGBoost classifier trained on 16 selected features returns a binary positive or negative prediction based on the entered data.",
-         "Binary classifier", "#f5f0fe", "#5a38b0", "rgba(124,82,204,0.25)"),
-        ("P2", "Phenotype classification",
-         "If positive, a Random Forest pipeline classifies the case into one of four Rotterdam phenotypes with per-class probability scores and a clinical dashboard.",
-         "Multi-class &middot; A / B / C / D", "#f5f0fe", "#5a38b0", "rgba(124,82,204,0.25)"),
+         "Six sections: anthropometrics, vitals, menstrual history, laboratory values (Beta-HCG I, AMH, RBS), ultrasound follicle counts, and reported symptoms.",
+         "~3 min to complete", "#f5f0fe", "#7a5caa", "#ddd0f5"),
+        ("02", "Rotterdam rule check",
+         "The three Rotterdam criteria (OA, HA, PCO) are evaluated. If at least two criteria are met, PCOS is confirmed and the phenotype (A–D) is determined by the specific combination present.",
+         "Rule-based · OA / HA / PCO flags", "#f5f0fe", "#5a38b0", "rgba(124,82,204,0.25)"),
+        ("03", "ML phenotype refinement",
+         "An RandomForest pipeline trained on 26 TOMIM-selected features confirms the phenotype classification with per-class probability scores and a full clinical dashboard.",
+         "Multi-class · A / B / C / D", "#f5f0fe", "#5a38b0", "rgba(124,82,204,0.25)"),
     ]
     how_html = ""
     for num, title, body, tag, tag_bg, tag_color, tag_border in steps_data:
@@ -512,7 +575,6 @@ if app_step == "overview":
         unsafe_allow_html=True
     )
 
-    # ── Disclaimer ────────────────────────────────────────
     st.markdown(
         '<div class="ov-disclaimer">'
         '<strong>Clinical disclaimer</strong> &mdash; This tool is intended for research and educational purposes only. '
@@ -523,12 +585,12 @@ if app_step == "overview":
         unsafe_allow_html=True
     )
 
-    # ── CTA ───────────────────────────────────────────────
     col_l, col_r = st.columns([3, 1])
     with col_r:
         if st.button("Begin Assessment \u2192", use_container_width=True):
             st.session_state.app_step = "form"
             st.rerun()
+
 # ─────────────────────────────────────────────────────────
 # FORM
 # ─────────────────────────────────────────────────────────
@@ -675,109 +737,70 @@ elif app_step == "form":
                 st.session_state.active_section = 3; st.rerun()
         if back: st.session_state.active_section = 1; st.rerun()
 
-    # ── SECTION 3: LABS ──────────────────────────────────
+    # ── SECTION 3: LABS (TOMIM-25 ONLY) ─────────────────
+    # Kept: beta-hcg I, AMH, RBS
+    # Removed: beta-hcg II, FSH, LH, TSH, PRL, Hemoglobin, Vitamin D3, Progesterone
     elif active_sec == 3:
         with st.form("sec_3"):
             st.markdown("""<div class="section-card"><div class="section-header">
                 <div class="section-icon">04</div>
                 <div><div class="section-title">Laboratory Values</div>
-                <div class="section-desc">Hormones and blood markers</div></div>
+                <div class="section-desc">Beta-HCG I, AMH, and Random Blood Sugar</div></div>
             </div>""", unsafe_allow_html=True)
 
-            c1, c2, c3, c4 = st.columns(4)
-            hb          = c1.number_input("Hemoglobin (g/dl)",     min_value=5.0,  max_value=20.0,  value=sd.get("hb",          None), step=0.1, placeholder="Type here")
-            beta_hcg_i  = c2.number_input("Beta-HCG I (mIU/mL)",  min_value=0.0,  max_value=500.0, value=sd.get("beta_hcg_i",  None), step=0.1, placeholder="Type here")
-            beta_hcg_ii = c3.number_input("Beta-HCG II (mIU/mL)", min_value=0.0,  max_value=500.0, value=sd.get("beta_hcg_ii", None), step=0.1, placeholder="Type here")
-            fsh         = c4.number_input("FSH (mIU/mL)",          min_value=0.0,  max_value=30.0,  value=sd.get("fsh",         None), step=0.1, placeholder="Type here")
-
-            c1, c2, c3, c4 = st.columns(4)
-            lh    = c1.number_input("LH (mIU/mL)",  min_value=0.0, max_value=50.0,  value=sd.get("lh",  None), step=0.1, placeholder="Type here")
-            tsh   = c2.number_input("TSH (mIU/L)",  min_value=0.0, max_value=10.0,  value=sd.get("tsh", None), step=0.1, placeholder="Type here")
-            prl   = c3.number_input("PRL (ng/mL)",  min_value=0.0, max_value=100.0, value=sd.get("prl", None), step=0.1, placeholder="Type here")
-            amh   = c4.number_input("AMH (ng/mL)",  min_value=0.0, max_value=15.0,  value=sd.get("amh", None), step=0.1, placeholder="Type here")
-
-            c1, c2, c3, c4 = st.columns(4)
-            vit_d = c1.number_input("Vitamin D3 (ng/mL)",         min_value=0.0, max_value=100.0, value=sd.get("vit_d", None), step=0.1, placeholder="Type here")
-            prg   = c2.number_input("Progesterone (ng/mL)",       min_value=0.0, max_value=30.0,  value=sd.get("prg",   None), step=0.1, placeholder="Type here")
-            rbs   = c3.number_input("Random Blood Sugar (mg/dl)", min_value=50.0,max_value=400.0, value=sd.get("rbs",   None), step=1.0, placeholder="Type here")
-
-            fsh_lh = round(fsh / lh, 3) if (fsh and lh and lh > 0) else sd.get("_calc_fshlh")
-            fsh_lh_display = f"{fsh_lh:.3f}" if fsh_lh else "—"
-            c4.markdown(f'<div class="auto-pill">FSH/LH Ratio<span>{fsh_lh_display}</span></div>', unsafe_allow_html=True)
+            c1, c2, c3 = st.columns(3)
+            beta_hcg_i = c1.number_input("Beta-HCG I (mIU/mL)",       min_value=0.0,  max_value=500.0, value=sd.get("beta_hcg_i", None), step=0.1, placeholder="Type here")
+            amh        = c2.number_input("AMH (ng/mL)",                min_value=0.0,  max_value=15.0,  value=sd.get("amh",        None), step=0.1, placeholder="Type here")
+            rbs        = c3.number_input("Random Blood Sugar (mg/dl)", min_value=50.0, max_value=400.0, value=sd.get("rbs",        None), step=1.0, placeholder="Type here")
 
             st.markdown("</div>", unsafe_allow_html=True)
-
-            calc_col, _, next_col = st.columns([1, 0.1, 3.9])
-            with calc_col:
-                calc = st.form_submit_button("Calculate", use_container_width=True)
-            with next_col:
-                nxt = st.form_submit_button("Next — Ultrasound Findings", use_container_width=True)
-            back = st.form_submit_button("Back")
-
-        if calc:
-            _fshlh = round(fsh/lh, 3) if (fsh and lh and lh > 0) else None
-            sd.update({
-                "hb":hb,"beta_hcg_i":beta_hcg_i,"beta_hcg_ii":beta_hcg_ii,
-                "fsh":fsh,"lh":lh,"tsh":tsh,"prl":prl,"amh":amh,
-                "vit_d":vit_d,"prg":prg,"rbs":rbs,"_calc_fshlh":_fshlh,
-            })
-            st.rerun()
+            back, nxt = nav_buttons("sec_3", 2, "Next — Ultrasound Findings")
 
         if nxt:
-            lab_fields = [
-                ("Hemoglobin",hb),("Beta-HCG I",beta_hcg_i),("Beta-HCG II",beta_hcg_ii),
-                ("FSH",fsh),("LH",lh),("TSH",tsh),("PRL",prl),("AMH",amh),
-                ("Vitamin D3",vit_d),("Progesterone",prg),("Random Blood Sugar",rbs),
-            ]
-            missing = [f for f, v in lab_fields if v is None]
+            missing = [f for f, v in [("Beta-HCG I",beta_hcg_i),("AMH",amh),("Random Blood Sugar",rbs)] if v is None]
             if missing:
                 st.error("Some fields are incomplete. Please review all inputs before continuing.")
             else:
-                _fshlh = round(fsh/lh, 3) if (fsh and lh and lh > 0) else None
                 sd.update({
-                    "hb":hb,"beta_hcg_i":beta_hcg_i,"beta_hcg_ii":beta_hcg_ii,
-                    "fsh":fsh,"lh":lh,"fsh_lh":_fshlh,"tsh":tsh,"prl":prl,
-                    "amh":amh,"vit_d":vit_d,"prg":prg,"rbs":rbs,"_calc_fshlh":_fshlh,
+                    "beta_hcg_i": beta_hcg_i,
+                    "amh":        amh,
+                    "rbs":        rbs,
                 })
                 st.session_state.active_section = 4; st.rerun()
         if back: st.session_state.active_section = 2; st.rerun()
 
-    # ── SECTION 4: ULTRASOUND ────────────────────────────
+    # ── SECTION 4: ULTRASOUND (TOMIM-25 ONLY) ───────────
+    # Kept: follicle no. L, follicle no. R
+    # Removed: avg follicle size L/R, endometrium thickness
     elif active_sec == 4:
         with st.form("sec_4"):
             st.markdown("""<div class="section-card"><div class="section-header">
                 <div class="section-icon">05</div>
                 <div><div class="section-title">Ultrasound Findings</div>
-                <div class="section-desc">Follicle count and size, endometrium thickness</div></div>
+                <div class="section-desc">Antral follicle count for left and right ovary</div></div>
             </div>""", unsafe_allow_html=True)
 
-            c1, c2, c3, c4 = st.columns(4)
-            follicle_l  = c1.number_input("Follicle No. (Left)",       min_value=0,   max_value=30,   value=sd.get("follicle_l", None), placeholder="Type here")
-            follicle_r  = c2.number_input("Follicle No. (Right)",      min_value=0,   max_value=30,   value=sd.get("follicle_r", None), placeholder="Type here")
-            avg_f_l     = c3.number_input("Avg. Follicle Size L (mm)", min_value=0.0, max_value=30.0, value=sd.get("avg_f_l",   None), step=0.5, placeholder="Type here")
-            avg_f_r     = c4.number_input("Avg. Follicle Size R (mm)", min_value=0.0, max_value=30.0, value=sd.get("avg_f_r",   None), step=0.5, placeholder="Type here")
-            endometrium = st.number_input("Endometrium Thickness (mm)", min_value=0.0, max_value=20.0, value=sd.get("endometrium", None), step=0.1, placeholder="Type here")
+            c1, c2 = st.columns(2)
+            follicle_l = c1.number_input("Follicle No. (Left Ovary)",  min_value=0, max_value=30, value=sd.get("follicle_l", None), placeholder="Type here")
+            follicle_r = c2.number_input("Follicle No. (Right Ovary)", min_value=0, max_value=30, value=sd.get("follicle_r", None), placeholder="Type here")
 
             st.markdown("</div>", unsafe_allow_html=True)
             back, nxt = nav_buttons("sec_4", 3, "Next — Clinical Symptoms")
 
         if nxt:
-            missing = [f for f, v in [
-                ("Follicle No. Left",follicle_l),("Follicle No. Right",follicle_r),
-                ("Avg. Follicle Size L",avg_f_l),("Avg. Follicle Size R",avg_f_r),
-                ("Endometrium Thickness",endometrium),
-            ] if v is None]
+            missing = [f for f, v in [("Follicle No. Left",follicle_l),("Follicle No. Right",follicle_r)] if v is None]
             if missing:
                 st.error("Some fields are incomplete. Please review all inputs before continuing.")
             else:
                 sd.update({
-                    "follicle_l":follicle_l,"follicle_r":follicle_r,
-                    "avg_f_l":avg_f_l,"avg_f_r":avg_f_r,"endometrium":endometrium,
+                    "follicle_l": follicle_l,
+                    "follicle_r": follicle_r,
                 })
                 st.session_state.active_section = 5; st.rerun()
         if back: st.session_state.active_section = 3; st.rerun()
 
-    # ── SECTION 5: SYMPTOMS ──────────────────────────────
+    # ── SECTION 5: SYMPTOMS (TOMIM-25 ONLY) ─────────────
+    # Kept: weight gain, hair growth, pimples, fast food, exercise
     elif active_sec == 5:
         with st.form("sec_5"):
             st.markdown("""<div class="section-card"><div class="section-header">
@@ -790,172 +813,272 @@ elif app_step == "form":
             yn = ["No","Yes"]
             weight_gain = c1.radio("Weight Gain?",         yn, index=yn.index(sd.get("weight_gain_label","No")), horizontal=True)
             hair_growth = c2.radio("Excess Hair Growth?",  yn, index=yn.index(sd.get("hair_growth_label","No")), horizontal=True)
-            skin_dark   = c3.radio("Skin Darkening?",      yn, index=yn.index(sd.get("skin_dark_label","No")),   horizontal=True)
+            pimples     = c3.radio("Pimples / Acne?",      yn, index=yn.index(sd.get("pimples_label","No")),     horizontal=True)
 
             c1, c2, c3 = st.columns(3)
-            pimples   = c1.radio("Pimples / Acne?",        yn, index=yn.index(sd.get("pimples_label","No")),   horizontal=True)
-            fast_food = c2.radio("Fast Food (regularly)?", yn, index=yn.index(sd.get("fast_food_label","No")), horizontal=True)
-            exercise  = c3.radio("Regular Exercise?",      yn, index=yn.index(sd.get("exercise_label","No")),  horizontal=True)
+            fast_food = c1.radio("Fast Food (regularly)?", yn, index=yn.index(sd.get("fast_food_label","No")), horizontal=True)
+            exercise  = c2.radio("Regular Exercise?",      yn, index=yn.index(sd.get("exercise_label","No")),  horizontal=True)
+            skin_dark   = c3.radio("Skin Darkening?",      yn, index=yn.index(sd.get("skin_dark_label","No")),   horizontal=True)
 
             st.markdown("</div>", unsafe_allow_html=True)
-            back, nxt = nav_buttons("sec_5", 4, "Run PCOS Detection")
+            back, nxt = nav_buttons("sec_5", 4, "Run Diagnostic")
 
         if nxt:
             sd.update({
-                "weight_gain_label":weight_gain, "weight_gain":1 if weight_gain=="Yes" else 0,
-                "hair_growth_label":hair_growth, "hair_growth":1 if hair_growth=="Yes" else 0,
+                "weight_gain_label": weight_gain, "weight_gain": 1 if weight_gain=="Yes" else 0,
+                "hair_growth_label": hair_growth, "hair_growth": 1 if hair_growth=="Yes" else 0,
+                "pimples_label":     pimples,     "pimples":     1 if pimples=="Yes" else 0,
                 "skin_dark_label":skin_dark,     "skin_darkening":1 if skin_dark=="Yes" else 0,
-                "pimples_label":pimples,         "pimples":1 if pimples=="Yes" else 0,
-                "fast_food_label":fast_food,     "fast_food":1 if fast_food=="Yes" else 0,
-                "exercise_label":exercise,       "exercise":1 if exercise=="Yes" else 0,
+                "fast_food_label":   fast_food,   "fast_food":   1 if fast_food=="Yes" else 0,
+                "exercise_label":    exercise,    "exercise":    1 if exercise=="Yes" else 0,
             })
             s = sd
+
+            # ── Build unified input dict (25 TOMIM features + extras for display) ──
             inp = {
-                "Hb(g/dl)":s["hb"], "I   beta-HCG(mIU/mL)":s["beta_hcg_i"],
-                "II    beta-HCG(mIU/mL)":s["beta_hcg_ii"], "FSH(mIU/mL)":s["fsh"],
-                "LH(mIU/mL)":s["lh"], "FSH/LH":s.get("fsh_lh"), "Waist(inch)":s["waist"],
-                "TSH (mIU/L)":s["tsh"], "AMH(ng/mL)":s["amh"], "PRL(ng/mL)":s["prl"],
-                "Vit D3 (ng/mL)":s["vit_d"], "PRG(ng/mL)":s["prg"], "RBS(mg/dl)":s["rbs"],
-                "Follicle No. (L)":s["follicle_l"], "Follicle No. (R)":s["follicle_r"],
-                "Avg. F size (L) (mm)":s["avg_f_l"],
-                "age":s["age"], "weight":s["weight"], "height":s["height"], "bmi":s["bmi"],
-                "blood group":s["bg_code"], "pulse rate (bpm)":s["pulse"],
-                "cycle (2/4)":s["cycle_24"], "marraige status (yrs)":s["marriage_yr"],
-                "pregnant (1/0)":s["pregnant"], "no. of abortions":s["abortions"],
-                "i   beta-hcg(miu/ml)":s["beta_hcg_i"], "hip (inch)":s["hip"],
-                "waist (inch)":s["waist"], "waist:hip ratio":s["whr"],
-                "amh (ng/ml)":s["amh"], "rbs (mg/dl)":s["rbs"],
-                "weight gain (1/0)":s["weight_gain"], "hair growth (1/0)":s["hair_growth"],
-                "skin darkening (1/0)":s["skin_darkening"], "pimples (1/0)":s["pimples"],
-                "fast food (1/0)":s["fast_food"], "reg.exercise (1/0)":s["exercise"],
-                "bp _systolic (mmhg)":s["bp_sys"], "bp _diastolic (mmhg)":s["bp_dia"],
-                "follicle no. (l)":s["follicle_l"], "follicle no. (r)":s["follicle_r"],
-                "cycle_ri":s["cycle_ri"],
+                # 25 TOMIM features (exact column names P2 expects)
+                "age":                  s["age"],
+                "weight":               s["weight"],
+                "height":               s["height"],
+                "bmi":                  s["bmi"],
+                "blood group":          s["bg_code"],
+                "pulse rate (bpm)":     s["pulse"],
+                "cycle (2/4)":          s["cycle_24"],
+                "marraige status (yrs)":s["marriage_yr"],
+                "pregnant (1/0)":       s["pregnant"],
+                "no. of abortions":     s["abortions"],
+                "i   beta-hcg(miu/ml)": s["beta_hcg_i"],
+                "hip (inch)":           s["hip"],
+                "waist (inch)":         s["waist"],
+                "waist:hip ratio":      s["whr"],
+                "amh (ng/ml)":          s["amh"],
+                "rbs (mg/dl)":          s["rbs"],
+                "weight gain (1/0)":    s["weight_gain"],
+                "hair growth (1/0)":    s["hair_growth"],
+                "pimples (1/0)":        s["pimples"],
+                "fast food (1/0)":      s["fast_food"],
+                "reg.exercise (1/0)":   s["exercise"],
+                "bp _systolic (mmhg)":  s["bp_sys"],
+                "bp _diastolic (mmhg)": s["bp_dia"],
+                "follicle no. (l)":     s["follicle_l"],
+                "follicle no. (r)":     s["follicle_r"],
+                # Extra fields needed by rule engine and display
+                "cycle_ri":             s["cycle_ri"],
+                "skin darkening (1/0)": s["skin_darkening"],
             }
             st.session_state.inputs = inp
-            pcos_pos = predict_pcos(inp)
-            st.session_state.pcos_result = pcos_pos
-            st.session_state.app_step = "pcos_result"
+
+            # ── Rotterdam rule-based detection ──────────────────────────────
+            oa, ha, pco = evaluate_rotterdam(inp)
+            rule_phenotype = classify_phenotype_rule(oa, ha, pco)
+            pcos_positive  = rule_phenotype is not None
+            st.session_state.pcos_result     = pcos_positive
+            st.session_state.rotterdam_flags = (oa, ha, pco)
+
+            if pcos_positive:
+                ph_ml, probs = predict_phenotype(inp)
+                st.session_state.phenotype_result = (rule_phenotype, probs)
+            else:
+                st.session_state.phenotype_result = None
+
+            st.session_state.app_step = "result"
             st.rerun()
+
         if back: st.session_state.active_section = 4; st.rerun()
 
 # ─────────────────────────────────────────────────────────
-# PCOS RESULT
+# RESULT PAGE
 # ─────────────────────────────────────────────────────────
-elif app_step == "pcos_result":
-    pcos_pos = st.session_state.pcos_result
+elif app_step == "result":
+    pcos_pos      = st.session_state.pcos_result
+    oa, ha, pco   = st.session_state.rotterdam_flags
+    inp           = st.session_state.inputs
+
+    def crit_badge(label, met, detail):
+        if met:
+            bg, border, text, icon = "#f0ebff","#7c52cc","#4a2c9e","✓"
+        else:
+            bg, border, text, icon = "#f9f9f9","#d0d0d0","#999999","✗"
+        return (
+            f'<div style="background:{bg};border:1.5px solid {border};border-radius:10px;'
+            f'padding:0.7rem 1rem;flex:1;min-width:160px;">'
+            f'<div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.1em;'
+            f'color:{"#7c52cc" if met else "#999"};font-weight:700;margin-bottom:0.25rem;">'
+            f'{icon} {label}</div>'
+            f'<div style="font-size:0.8rem;color:{text};line-height:1.4;">{detail}</div>'
+            f'</div>'
+        )
+
+    fl = inp.get("follicle no. (l)", 0) or 0
+    fr = inp.get("follicle no. (r)", 0) or 0
+
+    oa_detail  = "Irregular menstrual cycle" if oa else "Regular menstrual cycle"
+    ha_detail  = "Hair growth / acne / skin darkening present" if ha else "No hyperandrogenism signs"
+    pco_detail = f"Follicles L:{fl} R:{fr} (≥12 threshold)" if pco else f"Follicles L:{fl} R:{fr} (below threshold)"
+
+    badges_html = (
+        '<div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-bottom:1.2rem;">'
+        + crit_badge("OA — Anovulation",         oa,  oa_detail)
+        + crit_badge("HA — Hyperandrogenism",    ha,  ha_detail)
+        + crit_badge("PCO — Polycystic Ovaries", pco, pco_detail)
+        + '</div>'
+    )
+    st.markdown(badges_html, unsafe_allow_html=True)
+
     if pcos_pos:
-        st.markdown("""
-        <div class="result-positive">
-            <div class="result-positive-accent">!</div>
-            <div class="result-title">PCOS Detected</div>
-            <div class="result-subtitle">The model predicts a <strong>positive</strong> result for Polycystic Ovary Syndrome.</div>
+        ph, probs   = st.session_state.phenotype_result
+        info        = PHENOTYPE_INFO[ph]
+        ph_colors   = {"A":"#7c52cc","B":"#b83232","C":"#1a6e3c","D":"#9a7010"}
+
+        st.markdown(f"""
+        <div class="result-positive" style="text-align:center;padding:1.6rem 2rem;">
+            <div style="width:60px;height:60px;background:{info['color']};border-radius:50%;
+                        display:flex;align-items:center;justify-content:center;margin:0 auto 0.8rem;
+                        color:white;font-family:'Libre Baskerville',serif;font-size:1.4rem;font-weight:700;">
+                {ph}
+            </div>
+            <div class="result-title">PCOS Detected — {info['label']}</div>
+            <div class="result-subtitle">{info['sublabel']} &nbsp;·&nbsp; {info['description']}</div>
         </div>
         """, unsafe_allow_html=True)
+
         st.markdown("<br>", unsafe_allow_html=True)
-        col1, col2 = st.columns(2)
+        # ═══════════════════════════════════════════════════════════════════════════
+# IMPROVEMENT 1 — Result page col1 / col2
+# Replace the existing col1 / col2 block inside `elif app_step == "result":`
+# after the result-positive card and the <br> spacer.
+# ═══════════════════════════════════════════════════════════════════════════
+ 
+        col1, col2 = st.columns(2, gap="large")
+ 
         with col1:
-            if st.button("Proceed to Phenotype Classification", use_container_width=True):
-                st.session_state.app_step = "phenotype_result"; st.rerun()
+            # ── Rotterdam criteria met ──────────────────────────────────────
+            crit_items = []
+            if oa:  crit_items.append(("OA", "Oligo / Anovulation",    "Irregular menstrual cycle confirmed"))
+            if ha:  crit_items.append(("HA", "Hyperandrogenism",        "Hair growth, acne, or skin darkening"))
+            if pco: crit_items.append(("PCO","Polycystic Ovaries",      f"Follicles L:{fl}  R:{fr} (≥12 threshold)"))
+ 
+            crit_html = '<div style="margin-bottom:1.2rem;">'
+            crit_html += (
+                '<div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.13em;'
+                'color:#9580b8;font-weight:700;margin-bottom:0.6rem;">Rotterdam Criteria Met</div>'
+            )
+            for code, title, detail in crit_items:
+                crit_html += (
+                    f'<div style="display:flex;align-items:flex-start;gap:0.65rem;'
+                    f'margin-bottom:0.5rem;padding:0.6rem 0.8rem;'
+                    f'background:rgba(108,63,197,0.06);border:1px solid #ddd0f5;border-radius:9px;">'
+                    f'<div style="width:28px;height:28px;background:#1a0e36;border-radius:6px;'
+                    f'display:flex;align-items:center;justify-content:center;flex-shrink:0;'
+                    f'font-size:0.58rem;font-weight:700;color:#b08af5;letter-spacing:0.02em;">{code}</div>'
+                    f'<div>'
+                    f'<div style="font-size:0.8rem;font-weight:600;color:#1e1040;line-height:1.2;">{title}</div>'
+                    f'<div style="font-size:0.7rem;color:#9580b8;margin-top:1px;">{detail}</div>'
+                    f'</div>'
+                    f'</div>'
+                )
+            crit_html += '</div>'
+            st.markdown(crit_html, unsafe_allow_html=True)
+ 
+            # ── Phenotype clinical features ─────────────────────────────────
+            feat_html = (
+                '<div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.13em;'
+                'color:#9580b8;font-weight:700;margin-bottom:0.6rem;">Phenotype Clinical Features</div>'
+            )
+            for feat in info["features"]:
+                feat_html += (
+                    f'<div style="display:flex;align-items:flex-start;gap:0.55rem;'
+                    f'margin-bottom:0.4rem;font-size:0.8rem;color:#4a3a6e;line-height:1.5;">'
+                    f'<span style="width:5px;height:5px;border-radius:50%;background:#7c52cc;'
+                    f'flex-shrink:0;margin-top:0.4rem;display:inline-block;"></span>'
+                    f'{feat}</div>'
+                )
+            st.markdown(feat_html, unsafe_allow_html=True)
+ 
         with col2:
-            if st.button("Start Over", use_container_width=True):
+            # ── P2 probability bars ─────────────────────────────────────────
+            ph_colors = {"A": "#6c3fc5", "B": "#9f1239", "C": "#166534", "D": "#92400e"}
+ 
+            st.markdown(
+                '<div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.13em;'
+                'color:#9580b8;font-weight:700;margin-bottom:0.4rem;">P2 Model — Phenotype Confidence</div>'
+                '<p style="font-size:0.73rem;color:#9580b8;margin-bottom:0.9rem;line-height:1.5;">'
+                'Rotterdam rule-based classification confirmed. Bars show the XGBoost P2 pipeline\'s '
+                'per-class probability scores.</p>',
+                unsafe_allow_html=True,
+            )
+ 
+            for pk in ["A", "B", "C", "D"]:
+                pv  = probs[pk]
+                bw  = int(pv * 100)
+                is_selected = pk == ph
+                opacity = "1" if is_selected else "0.45"
+                weight  = "700" if is_selected else "400"
+                bar_color = ph_colors[pk]
+ 
+                st.markdown(f"""
+                <div style="margin-bottom:0.85rem;opacity:{opacity};">
+                  <div style="display:flex;justify-content:space-between;align-items:baseline;
+                              margin-bottom:4px;">
+                    <div style="display:flex;align-items:center;gap:0.5rem;">
+                      <span style="width:9px;height:9px;border-radius:50%;
+                                   background:{bar_color};display:inline-block;flex-shrink:0;"></span>
+                      <span style="font-size:0.8rem;font-weight:{weight};color:#2e1a58;">
+                        Phenotype {pk} &nbsp;
+                        <span style="font-weight:400;color:#9580b8;font-size:0.72rem;">
+                          {PHENOTYPE_INFO[pk]['sublabel']}
+                        </span>
+                      </span>
+                    </div>
+                    <span style="font-size:0.8rem;font-weight:{weight};color:{bar_color};">{bw}%</span>
+                  </div>
+                  <div style="background:#ede6f5;border-radius:4px;height:6px;overflow:hidden;">
+                    <div style="width:{bw}%;height:6px;border-radius:4px;
+                                background:{bar_color};transition:width 0.4s ease;"></div>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+        st.markdown("<br>", unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("View Clinical Dashboard", use_container_width=True):
+                st.session_state.app_step = "dashboard"; st.rerun()
+        with c2:
+            if st.button("Start Over with New Patient", use_container_width=True):
                 reset(); st.rerun()
+
     else:
-        st.markdown("""
+        criteria_met = sum([oa, ha, pco])
+        st.markdown(f"""
         <div class="result-negative">
             <div class="result-negative-accent">&#10003;</div>
             <div class="result-title" style="color:#154030;">No PCOS Detected</div>
-            <div class="result-subtitle">The model predicts a <strong>negative</strong> result. Phenotype classification will not proceed.</div>
+            <div class="result-subtitle">
+                Only <strong>{criteria_met} of 3</strong> Rotterdam criteria are present.
+                At least 2 of 3 must be met for a PCOS diagnosis.
+                Phenotype classification will not proceed.
+            </div>
         </div>
         """, unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("Start Over with New Patient", use_container_width=True):
             reset(); st.rerun()
+
     st.markdown("""<div class="disclaimer"><strong>Clinical Disclaimer:</strong>
         This tool is for research and educational purposes only. Results do not constitute a medical diagnosis
-        and must be confirmed by a licensed healthcare professional.</div>""", unsafe_allow_html=True)
-
-# ─────────────────────────────────────────────────────────
-# PHENOTYPE RESULT
-# ─────────────────────────────────────────────────────────
-elif app_step == "phenotype_result":
-    inp = st.session_state.inputs
-    ph, probs = predict_phenotype(inp)
-    st.session_state.phenotype_result = (ph, probs)
-    info = PHENOTYPE_INFO[ph]
-
-    st.markdown(f"""
-    <div class="phenotype-card">
-        <div style="width:52px;height:52px;background:{info['color']};border-radius:50%;
-                    display:flex;align-items:center;justify-content:center;margin:0 auto 0.9rem;
-                    color:white;font-family:'Libre Baskerville',serif;font-size:1.2rem;font-weight:700;">
-            {ph}
-        </div>
-        <div class="result-title">{info['label']} — {info['sublabel']}</div>
-        <div class="result-subtitle">{info['description']}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("#### Phenotype Probabilities")
-        ph_colors = {"A":"#7c52cc","B":"#b83232","C":"#1a6e3c","D":"#9a7010"}
-        for pk in ["A","B","C","D"]:
-            pv  = probs[pk]; bw = int(pv * 100)
-            sty = "font-weight:700;" if pk == ph else "opacity:0.55;"
-            st.markdown(f"""
-            <div class="prob-row">
-                <div class="prob-label" style="{sty}">
-                    <span>Phenotype {pk} — {PHENOTYPE_INFO[pk]['sublabel']}</span>
-                    <span>{bw}%</span>
-                </div>
-                <div class="prob-bar-bg">
-                    <div class="prob-bar-fill" style="width:{bw}%; background:{ph_colors[pk]};"></div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-    with col2:
-        st.markdown("#### Clinical Features of this Phenotype")
-        for feat in info["features"]:
-            st.markdown(f"&bull; {feat}")
-        st.markdown("#### Key Indicators Found")
-        findings = []
-        if inp.get("cycle_ri") == 1:             findings.append(("Irregular menstrual cycle","tag-red"))
-        if inp.get("hair growth (1/0)") == 1:    findings.append(("Excess hair growth","tag-red"))
-        if inp.get("pimples (1/0)") == 1:        findings.append(("Acne / pimples","tag-orange"))
-        if inp.get("weight gain (1/0)") == 1:    findings.append(("Weight gain","tag-orange"))
-        if inp.get("skin darkening (1/0)") == 1: findings.append(("Skin darkening","tag-yellow"))
-        amh_v = inp.get("amh (ng/ml)", 0) or 0
-        if amh_v > 3.5:                          findings.append((f"Elevated AMH ({amh_v:.1f} ng/mL)","tag-red"))
-        fl = inp.get("follicle no. (l)", 0) or 0
-        fr = inp.get("follicle no. (r)", 0) or 0
-        if fl > 10 or fr > 10:                   findings.append((f"Polycystic ovaries (L:{fl} R:{fr})","tag-red"))
-        if not findings:                          findings.append(("No major hyperandrogenism markers","tag-green"))
-        tags = "".join(f'<span class="finding-tag {cls}">{txt}</span>' for txt, cls in findings)
-        st.markdown(tags, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("View Clinical Dashboard", use_container_width=True):
-            st.session_state.app_step = "dashboard"; st.rerun()
-    with col2:
-        if st.button("Start Over with New Patient", use_container_width=True):
-            reset(); st.rerun()
-
-    st.markdown("""<div class="disclaimer"><strong>Clinical Disclaimer:</strong>
-        This tool is for research and educational purposes only. Phenotype classification must be confirmed
-        by a licensed OB-GYN or reproductive endocrinologist using the Rotterdam criteria.</div>""", unsafe_allow_html=True)
+        and must be confirmed by a licensed healthcare professional. Rotterdam criteria are applied to
+        self-reported and entered clinical data only.</div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────
 # DASHBOARD
 # ─────────────────────────────────────────────────────────
 elif app_step == "dashboard":
-    inp  = st.session_state.inputs
-    sd   = st.session_state.section_data
+    inp       = st.session_state.inputs
+    sd        = st.session_state.section_data
     ph, probs = st.session_state.phenotype_result
-    info = PHENOTYPE_INFO[ph]
+    info      = PHENOTYPE_INFO[ph]
+    oa, ha, pco = st.session_state.rotterdam_flags
 
     C_PURPLE = "#6c3fc5"
     C_NAVY   = "#1a0e36"
@@ -994,19 +1117,50 @@ elif app_step == "dashboard":
         if v < lo:    return C_LOW
         return C_OK
 
-    # ── KPI strip ─────────────────────────────────────────
+    # ── Rotterdam summary strip ───────────────────────────
+    def crit_mini(label, met, detail):
+        if met:
+            bg, border, icon = "rgba(108,63,197,0.08)","#7c52cc","✓"
+            tc = "#4a2c9e"
+        else:
+            bg, border, icon = "#f9f9f9","#d0d0d0","✗"
+            tc = "#999"
+        return (
+            f'<div style="background:{bg};border:1.5px solid {border};border-radius:9px;'
+            f'padding:0.5rem 0.9rem;flex:1;min-width:130px;text-align:center;">'
+            f'<div style="font-size:0.55rem;text-transform:uppercase;letter-spacing:0.1em;'
+            f'color:{tc};font-weight:700;">{icon} {label}</div>'
+            f'<div style="font-size:0.72rem;color:{tc};margin-top:0.1rem;">{detail}</div>'
+            f'</div>'
+        )
+
+    fl = inp.get("follicle no. (l)", 0) or 0
+    fr = inp.get("follicle no. (r)", 0) or 0
+    section_label("Rotterdam Criteria Summary")
+    st.markdown(
+        '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;">'
+        + crit_mini("OA — Anovulation",         oa,  "Irregular cycle" if oa else "Regular cycle")
+        + crit_mini("HA — Hyperandrogenism",    ha,  "Signs present" if ha else "No signs")
+        + crit_mini("PCO — Polycystic Ovaries", pco, f"Follicles L:{fl} R:{fr}")
+        + f'<div style="background:rgba(108,63,197,0.08);border:1.5px solid #7c52cc;border-radius:9px;'
+          f'padding:0.5rem 0.9rem;flex:1;min-width:130px;text-align:center;">'
+          f'<div style="font-size:0.55rem;text-transform:uppercase;letter-spacing:0.1em;'
+          f'color:#4a2c9e;font-weight:700;">Phenotype</div>'
+          f'<div style="font-size:0.72rem;color:#4a2c9e;font-weight:700;margin-top:0.1rem;">'
+          f'{ph} — {info["sublabel"]}</div>'
+          f'</div>'
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── KPI strip — TOMIM-25 labs only ───────────────────
     section_label("Key Biomarkers")
     KPI_DEF = [
-        ("BMI",         sd.get("bmi",  0) or 0, 18.5, 24.9,  "kg/m²"),
-        ("AMH",         sd.get("amh",  0) or 0,  1.0,  3.5,  "ng/mL"),
-        ("FSH",         sd.get("fsh",  0) or 0,  3.0, 10.0,  "mIU/mL"),
-        ("LH",          sd.get("lh",   0) or 0,  2.0, 15.0,  "mIU/mL"),
-        ("FSH/LH",      sd.get("fsh_lh",0) or 0, 1.0,  3.0,  "ratio"),
-        ("TSH",         sd.get("tsh",  0) or 0,  0.4,  4.0,  "mIU/L"),
-        ("PRL",         sd.get("prl",  0) or 0,  2.0, 29.0,  "ng/mL"),
-        ("Vitamin D3",  sd.get("vit_d",0) or 0, 20.0, 50.0,  "ng/mL"),
-        ("RBS",         sd.get("rbs",  0) or 0, 70.0,140.0,  "mg/dl"),
-        ("Hemoglobin",  sd.get("hb",   0) or 0, 12.0, 16.0,  "g/dl"),
+        ("BMI",      sd.get("bmi", 0) or 0,  18.5, 24.9,  "kg/m²"),
+        ("AMH",      sd.get("amh", 0) or 0,   1.0,  3.5,  "ng/mL"),
+        ("RBS",      sd.get("rbs", 0) or 0,  70.0,140.0,  "mg/dl"),
+        ("Waist:Hip",sd.get("whr", 0) or 0,   0.0,  0.85, "ratio"),
+        ("β-HCG I",  sd.get("beta_hcg_i", 0) or 0, 0.0, 5.0, "mIU/mL"),
     ]
 
     def kpi_html(label, val, lo, hi, unit):
@@ -1025,12 +1179,11 @@ elif app_step == "dashboard":
             f'</div>'
         )
 
-    for row_items in [KPI_DEF[:5], KPI_DEF[5:]]:
-        cells = "".join(kpi_html(l, v, lo, hi, u) for l, v, lo, hi, u in row_items)
-        st.markdown(
-            f'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0.5rem;margin-bottom:0.5rem;">{cells}</div>',
-            unsafe_allow_html=True,
-        )
+    cells = "".join(kpi_html(l, v, lo, hi, u) for l, v, lo, hi, u in KPI_DEF)
+    st.markdown(
+        f'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0.5rem;margin-bottom:1rem;">{cells}</div>',
+        unsafe_allow_html=True,
+    )
 
     st.markdown("<div style='height:1.4rem'></div>", unsafe_allow_html=True)
 
@@ -1038,7 +1191,7 @@ elif app_step == "dashboard":
     col_ph, col_bio = st.columns([1, 1.65], gap="large")
 
     with col_ph:
-        section_label("Phenotype Classification")
+        section_label("Phenotype Classification (P2 Model)")
         ph_colors = {"A": "#6c3fc5", "B": "#9f1239", "C": "#166534", "D": "#92400e"}
         sorted_probs = dict(sorted(probs.items(), key=lambda x: x[1], reverse=True))
         donut_labels = list(sorted_probs.keys())
@@ -1076,25 +1229,21 @@ elif app_step == "dashboard":
 
     with col_bio:
         section_label("Biomarker Status vs. Reference Range")
+        # Dashboard biomarker bar — only TOMIM-25 labs that have known reference ranges
         bm_data = [
-            ("BMI",          sd.get("bmi",  0) or 0, 18.5, 24.9,  "kg/m²"),
-            ("AMH",          sd.get("amh",  0) or 0,  1.0,  3.5,  "ng/mL"),
-            ("FSH",          sd.get("fsh",  0) or 0,  3.0, 10.0,  "mIU/mL"),
-            ("LH",           sd.get("lh",   0) or 0,  2.0, 15.0,  "mIU/mL"),
-            ("TSH",          sd.get("tsh",  0) or 0,  0.4,  4.0,  "mIU/L"),
-            ("PRL",          sd.get("prl",  0) or 0,  2.0, 29.0,  "ng/mL"),
-            ("Vitamin D3",   sd.get("vit_d",0) or 0, 20.0, 50.0,  "ng/mL"),
-            ("Progesterone", sd.get("prg",  0) or 0,  1.0, 25.0,  "ng/mL"),
-            ("RBS",          sd.get("rbs",  0) or 0, 70.0,140.0,  "mg/dl"),
-            ("Hemoglobin",   sd.get("hb",   0) or 0, 12.0, 16.0,  "g/dl"),
+            ("BMI",      sd.get("bmi", 0) or 0,  18.5, 24.9,  "kg/m²"),
+            ("AMH",      sd.get("amh", 0) or 0,   1.0,  3.5,  "ng/mL"),
+            ("RBS",      sd.get("rbs", 0) or 0,  70.0,140.0,  "mg/dl"),
+            ("Waist:Hip",sd.get("whr", 0) or 0,   0.0,  0.85, "ratio"),
+            ("β-HCG I",  sd.get("beta_hcg_i", 0) or 0, 0.0, 5.0, "mIU/mL"),
         ]
-        names   = [d[0] for d in bm_data]
-        vals    = [d[1] for d in bm_data]
-        hi_vals = [d[3] for d in bm_data]
-        lo_vals = [d[2] for d in bm_data]
-        units   = [d[4] for d in bm_data]
-        norm_pct = [min(v / hi * 100, 155) for v, hi in zip(vals, hi_vals)]
-        norm_lo  = [lo / hi * 100 for lo, hi in zip(lo_vals, hi_vals)]
+        names    = [d[0] for d in bm_data]
+        vals     = [d[1] for d in bm_data]
+        hi_vals  = [d[3] for d in bm_data]
+        lo_vals  = [d[2] for d in bm_data]
+        units    = [d[4] for d in bm_data]
+        norm_pct = [min(v / hi * 100, 155) if hi else 0 for v, hi in zip(vals, hi_vals)]
+        norm_lo  = [lo / hi * 100 if hi else 0 for lo, hi in zip(lo_vals, hi_vals)]
         status_lbl = ["High ↑" if v > hi else ("Low ↓" if v < lo else "Normal")
                       for v, lo, hi in zip(vals, lo_vals, hi_vals)]
 
@@ -1111,7 +1260,7 @@ elif app_step == "dashboard":
             marker=dict(symbol="line-ns", size=14, color=C_MUTED, line=dict(width=1.5, color=C_MUTED)),
             hoverinfo="skip", showlegend=False))
         fig_bio.update_layout(
-            **BASE_LAYOUT, barmode="overlay", height=370,
+            **BASE_LAYOUT, barmode="overlay", height=280,
             margin=dict(l=0, r=180, t=8, b=8),
             xaxis=dict(**axis_style(),
                 title=dict(text="% of upper reference limit", font=dict(family=FONT_SORA, size=9, color=C_MUTED)),
@@ -1125,7 +1274,7 @@ elif app_step == "dashboard":
 
     # ── XAI | Radar ───────────────────────────────────────
     st.markdown("<div style='height:0.3rem'></div>", unsafe_allow_html=True)
-    section_label("Model Explainability")
+    section_label("Model Explainability — P2 Random Forest Feature Importance")
 
     with st.spinner("Computing feature importance…"):
         shap_result, base_or_err = compute_shap_values(inp)
@@ -1139,50 +1288,141 @@ elif app_step == "dashboard":
             feat_vals   = [v for _, v in sorted_imp]
             max_v       = max(feat_vals) if feat_vals else 1
             norm_imp    = [v / max_v * 100 for v in feat_vals]
-            bar_opacities = [max(0.45, 0.9 - i * 0.045) for i in range(len(feat_labels))]
-
+ 
+            # ── Lollipop / dot-bar hybrid chart ────────────────────────────
+            # Reversed so highest importance is at top
+            y_pos       = list(range(len(feat_labels)))
+            feat_rev    = feat_labels[::-1]
+            norm_rev    = norm_imp[::-1]
+            raw_rev     = feat_vals[::-1]
+ 
             fig_imp = go.Figure()
-            for i in range(0, len(feat_labels), 2):
-                fig_imp.add_shape(type="rect", xref="paper", yref="y",
-                    x0=0, x1=1, y0=i-0.5, y1=i+0.5,
-                    fillcolor="rgba(108,63,197,0.03)", line=dict(width=0), layer="below")
-            fig_imp.add_trace(go.Bar(
-                y=feat_labels[::-1], x=norm_imp[::-1], orientation="h",
+ 
+            # Horizontal stem lines (thin, muted)
+            for i, (y, x) in enumerate(zip(y_pos, norm_rev)):
+                fig_imp.add_shape(
+                    type="line",
+                    x0=0, x1=x, y0=i, y1=i,
+                    line=dict(
+                        color=f"rgba(108,63,197,{max(0.15, x/100*0.55):.2f})",
+                        width=2,
+                    ),
+                    layer="below",
+                )
+ 
+            # Dot markers — size encodes importance
+            dot_sizes = [max(8, v / 100 * 22) for v in norm_rev]
+            dot_colors = [
+                f"rgba(108,63,197,{max(0.4, v/100*0.9):.2f})" for v in norm_rev
+            ]
+ 
+            fig_imp.add_trace(go.Scatter(
+                x=norm_rev,
+                y=y_pos,
+                mode="markers+text",
                 marker=dict(
-                    color=[f"rgba(108,63,197,{bar_opacities[::-1][i]:.2f})" for i in range(len(feat_labels))],
-                    line=dict(color="rgba(255,255,255,0.2)", width=0.5), cornerradius=3),
-                text=[f"<b>{v:.1f}</b>" for v in norm_imp[::-1]],
-                textposition="outside",
-                textfont=dict(family=FONT_SORA, size=10, color=C_TEXT),
-                hovertemplate="<b>%{y}</b><br>Relative importance: %{x:.1f}<extra></extra>"))
-            fig_imp.add_vline(x=100, line=dict(color=C_PURPLE, width=1, dash="dot"),
-                annotation_text="top feature", annotation_position="top right",
-                annotation_font=dict(size=8, color=C_MUTED))
-            fig_imp.update_layout(**BASE_LAYOUT, height=370,
-                margin=dict(l=0, r=70, t=10, b=30),
-                xaxis=dict(**axis_style(),
-                    title=dict(text="Relative importance (normalised, 0–100)",
-                        font=dict(family=FONT_SORA, size=9, color=C_MUTED)), range=[0, 125]),
-                yaxis=dict(tickfont=dict(family=FONT_SORA, size=11, color=C_TEXT),
-                    showgrid=False, autorange=True))
+                    size=dot_sizes,
+                    color=dot_colors,
+                    line=dict(color="#ffffff", width=1.5),
+                ),
+                text=[f" {v:.1f}" for v in norm_rev],
+                textposition="middle right",
+                textfont=dict(family=FONT_SORA, size=9.5, color=C_TEXT),
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "Normalised gain: %{x:.1f}<br>"
+                    "Raw gain: %{customdata[1]:.2f}<extra></extra>"
+                ),
+                customdata=list(zip(feat_rev, [f"{v:.2f}" for v in raw_rev])),
+            ))
+ 
+            # Top feature callout annotation
+            top_feat = feat_rev[-1]  # index -1 = last = top after reversal (highest)
+            # Actually feat_rev[0] is the lowest, feat_rev[-1] is highest shown at top
+            # y_pos[-1] is the top row
+            fig_imp.add_annotation(
+                x=norm_rev[-1],
+                y=y_pos[-1],
+                text=f"  ← top feature",
+                showarrow=False,
+                font=dict(family=FONT_SORA, size=8, color=C_MUTED),
+                xanchor="left",
+                yanchor="middle",
+                xshift=dot_sizes[-1] / 2 + 28,
+            )
+ 
+            fig_imp.update_layout(
+                **BASE_LAYOUT,
+                height=390,
+                margin=dict(l=0, r=90, t=10, b=30),
+                xaxis=dict(
+                    **axis_style(),
+                    range=[0, 130],
+                    title=dict(
+                        text="Relative importance — normalised gain (0 = lowest, 100 = highest)",
+                        font=dict(family=FONT_SORA, size=9, color=C_MUTED),
+                    ),
+                    ticksuffix="",
+                ),
+                yaxis=dict(
+                    tickmode="array",
+                    tickvals=y_pos,
+                    ticktext=feat_rev,
+                    tickfont=dict(family=FONT_SORA, size=10.5, color=C_TEXT),
+                    showgrid=False,
+                    autorange=False,
+                    range=[-0.6, len(feat_labels) - 0.4],
+                ),
+                showlegend=False,
+            )
             st.plotly_chart(fig_imp, use_container_width=True, config={"displayModeBar": False})
-            top_feat = sorted_imp[0][0]
+ 
+            # ── Ranked table below the chart ────────────────────────────────
+            top3 = sorted_imp[:3]
+            rank_html = (
+                '<div style="display:flex;gap:0.5rem;margin-top:-0.4rem;margin-bottom:0.3rem;">'
+            )
+            medals = ["🥇", "🥈", "🥉"]
+            for medal, (fname, fval) in zip(medals, top3):
+                pct = fval / max_v * 100
+                rank_html += (
+                    f'<div style="flex:1;background:#ffffff;border:1px solid {C_BORDER};'
+                    f'border-radius:9px;padding:0.55rem 0.7rem;">'
+                    f'<div style="font-size:0.9rem;margin-bottom:0.15rem;">{medal}</div>'
+                    f'<div style="font-size:0.7rem;font-weight:600;color:{C_TEXT};'
+                    f'line-height:1.3;margin-bottom:0.1rem;">{fname}</div>'
+                    f'<div style="font-size:0.65rem;color:{C_MUTED};">{pct:.1f} / 100</div>'
+                    f'</div>'
+                )
+            rank_html += "</div>"
+            st.markdown(rank_html, unsafe_allow_html=True)
+ 
             st.markdown(
-                f'<p style="font-size:0.72rem;color:{C_MUTED};margin-top:-0.3rem;">'
-                f'Bars show average decision gain per feature split. '
-                f'<b style="color:{C_TEXT};">{top_feat}</b> is the most influential predictor.</p>',
-                unsafe_allow_html=True)
+                f'<p style="font-size:0.7rem;color:{C_MUTED};margin-top:0.1rem;line-height:1.55;">'
+                f'Dot size and opacity encode relative importance. Scores are normalised Gini impurity-based '
+                f'feature importances from the P2 Random Forest pipeline — higher = more influential in '
+                f'phenotype classification. Not causal.</p>',
+                unsafe_allow_html=True,
+            )
         else:
-            st.warning("Feature importance could not be computed for this model configuration.")
+            st.markdown(
+                f'<div style="border:1px solid #f5c08a;border-radius:10px;'
+                f'padding:1rem 1.2rem;font-size:0.82rem;color:#7a3a10;">'
+                f'⚠ Feature importance unavailable.<br>'
+                f'<pre style="font-size:0.72rem;white-space:pre-wrap;margin-top:0.5rem;">'
+                f'{base_or_err}</pre></div>',
+                unsafe_allow_html=True,
+            )
 
     with col_radar:
+        # Radar uses TOMIM-25 features only — removed FSH/LH (not in TOMIM-25)
         radar_defs = [
-            ("AMH",       sd.get("amh",    0) or 0, 3.5),
-            ("FSH/LH",    sd.get("fsh_lh", 0) or 0, 3.0),
-            ("BMI",       sd.get("bmi",    0) or 0, 24.9),
-            ("Waist:Hip", sd.get("whr",    0) or 0, 0.85),
-            ("RBS",       sd.get("rbs",    0) or 0, 140.0),
-            ("LH",        sd.get("lh",     0) or 0, 15.0),
+            ("AMH",       sd.get("amh",        0) or 0, 3.5),
+            ("BMI",       sd.get("bmi",         0) or 0, 24.9),
+            ("Waist:Hip", sd.get("whr",         0) or 0, 0.85),
+            ("RBS",       sd.get("rbs",         0) or 0, 140.0),
+            ("β-HCG I",   sd.get("beta_hcg_i", 0) or 0, 5.0),
+            ("Follicles L",sd.get("follicle_l", 0) or 0, 12.0),
         ]
         r_labels = [d[0] for d in radar_defs]
         r_vals   = [min(d[1] / d[2] * 100, 140) for d in radar_defs]
@@ -1249,13 +1489,14 @@ elif app_step == "dashboard":
 
     with col_sym:
         section_label("Phenotype Driver Features")
+        # Driver chart — TOMIM-25 features with clinical thresholds
         driver_defs = [
-            ("AMH",         sd.get("amh",       0) or 0, 3.5,  "ng/mL"),
-            ("LH",          sd.get("lh",        0) or 0, 15.0, "mIU/mL"),
-            ("FSH/LH",      sd.get("fsh_lh",    0) or 0, 3.0,  "ratio"),
-            ("Follicles L", sd.get("follicle_l",0) or 0, 12.0, "count"),
-            ("Follicles R", sd.get("follicle_r",0) or 0, 12.0, "count"),
-            ("Waist:Hip",   sd.get("whr",       0) or 0, 0.85, "ratio"),
+            ("AMH",         sd.get("amh",        0) or 0, 3.5,  "ng/mL"),
+            ("β-HCG I",     sd.get("beta_hcg_i", 0) or 0, 5.0,  "mIU/mL"),
+            ("Follicles L", sd.get("follicle_l",  0) or 0, 12.0, "count"),
+            ("Follicles R", sd.get("follicle_r",  0) or 0, 12.0, "count"),
+            ("Waist:Hip",   sd.get("whr",         0) or 0, 0.85, "ratio"),
+            ("RBS",         sd.get("rbs",         0) or 0, 140.0,"mg/dl"),
         ]
         drv_labels = [d[0] for d in driver_defs]
         drv_raw    = [d[1] for d in driver_defs]
@@ -1301,29 +1542,23 @@ elif app_step == "dashboard":
             "pulse":"Pulse (bpm)", "bp_sys":"BP Systolic", "bp_dia":"BP Diastolic",
             "cycle_ri_label":"Cycle", "marriage_yr":"Marriage (yrs)",
             "pregnant_label":"Pregnant", "abortions":"Abortions",
-            "hb":"Hemoglobin", "beta_hcg_i":"β-HCG I", "beta_hcg_ii":"β-HCG II",
-            "fsh":"FSH", "lh":"LH", "fsh_lh":"FSH/LH", "tsh":"TSH",
-            "prl":"PRL", "amh":"AMH", "vit_d":"Vit D3",
-            "prg":"Progesterone", "rbs":"RBS",
+            "beta_hcg_i":"β-HCG I", "amh":"AMH", "rbs":"RBS",
             "follicle_l":"Follicles L", "follicle_r":"Follicles R",
-            "avg_f_l":"Avg Size L", "avg_f_r":"Avg Size R",
-            "endometrium":"Endometrium",
             "weight_gain_label":"Weight Gain", "hair_growth_label":"Hair Growth",
-            "skin_dark_label":"Skin Dark.", "pimples_label":"Pimples",
+            "pimples_label":"Pimples",
             "fast_food_label":"Fast Food", "exercise_label":"Exercises",
         }
         SECS = {
             "Anthropometric": ["age","weight","height","bmi","hip","waist","whr","blood_group"],
             "Vitals":         ["pulse","bp_sys","bp_dia"],
             "Menstrual":      ["cycle_ri_label","marriage_yr","pregnant_label","abortions"],
-            "Laboratory":     ["hb","beta_hcg_i","beta_hcg_ii","fsh","lh","fsh_lh","tsh","prl","amh","vit_d","prg","rbs"],
-            "Ultrasound":     ["follicle_l","follicle_r","avg_f_l","avg_f_r","endometrium"],
-            "Symptoms":       ["weight_gain_label","hair_growth_label","skin_dark_label","pimples_label","fast_food_label","exercise_label"],
+            "Laboratory":     ["beta_hcg_i","amh","rbs"],
+            "Ultrasound":     ["follicle_l","follicle_r"],
+            "Symptoms":       ["weight_gain_label","hair_growth_label","pimples_label","fast_food_label","exercise_label"],
         }
         RANGES = {
-            "bmi":(18.5,24.9),"whr":(0,0.85),"hb":(12,16),"fsh":(3,10),
-            "lh":(2,15),"fsh_lh":(1,3),"tsh":(0.4,4),"prl":(2,29),
-            "amh":(1,3.5),"vit_d":(20,50),"prg":(1,25),"rbs":(70,140),
+            "bmi":(18.5,24.9),"whr":(0,0.85),
+            "amh":(1,3.5),"rbs":(70,140),
             "pulse":(60,100),"bp_sys":(90,120),"bp_dia":(60,80),
         }
         for sec_title, keys in SECS.items():
@@ -1359,7 +1594,7 @@ elif app_step == "dashboard":
     c1, c2 = st.columns(2)
     with c1:
         if st.button("← Back to Results", use_container_width=True):
-            st.session_state.app_step = "phenotype_result"; st.rerun()
+            st.session_state.app_step = "result"; st.rerun()
     with c2:
         if st.button("Start New Patient", use_container_width=True):
             reset(); st.rerun()
@@ -1368,6 +1603,7 @@ elif app_step == "dashboard":
     <div class="disclaimer">
       <strong>Clinical Disclaimer:</strong>
       This dashboard is for research and educational purposes only. All findings must be interpreted
-      by a licensed OB-GYN or reproductive endocrinologist. Feature importance scores reflect model
-      behaviour, not clinical causation.
+      by a licensed OB-GYN or reproductive endocrinologist. PCOS detection is based on Rotterdam 2003
+      criteria applied to entered clinical data. Feature importance scores reflect P2 model behaviour,
+      not clinical causation.
     </div>""", unsafe_allow_html=True)
