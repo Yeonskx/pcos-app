@@ -488,7 +488,7 @@ if app_step == "overview":
         ("A", "#7c52cc", "rgba(124,82,204,0.08)", "#5a38b0",
          "Full Classic PCOS",
          "Anovulation + Hyperandrogenism + Polycystic Ovaries",
-         "All three Rotterdam criteria are met. Associated with the highest prevalence of metabolic comorbidities including insulin resistance and dyslipidaemia.",
+         "All three Rotterdam criteria are met. Associated with the highest prevalence of metabolic comorbidities including insulin resistance.",
          ["Irregular or absent menstrual cycles", "Clinical or biochemical hyperandrogenism",
           "Polycystic ovarian morphology on ultrasound", "LH and AMH frequently elevated"],
          "Highest associated metabolic risk &middot; All 3 criteria met"),
