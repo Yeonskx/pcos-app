@@ -3,7 +3,10 @@ import numpy as np
 import pandas as pd
 import pickle
 import traceback
+import base64
+import json
 import plotly.graph_objects as go
+import streamlit.components.v1 as components
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_selection import mutual_info_classif
 
@@ -29,13 +32,11 @@ def load_css(filepath):
 
 load_css("style.css")
 
-import base64
-
 def img_b64(path):
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode()
 
-OVARY_IMG = img_b64("ovarian_morphology.jpg")
+OVARY_IMG     = img_b64("ovarian_morphology.jpg")
 PHENOTYPES_IMG = img_b64("phenotypes.jpg")
 
 # ─────────────────────────────────────────────────────────
@@ -61,14 +62,6 @@ document.addEventListener('keydown', function(e) {
 # ─────────────────────────────────────────────────────────
 # ROTTERDAM RULE-BASED PCOS DETECTION
 # ─────────────────────────────────────────────────────────
-# Three Rotterdam criteria:
-#   OA  = Oligo/Anovulation      → irregular cycle
-#   HA  = Hyperandrogenism       → hair growth OR pimples/acne
-#   PCO = Polycystic Ovaries     → follicle no. (L) ≥ 12 OR follicle no. (R) ≥ 12
-#
-# NOTE: skin darkening removed from form (not in TOMIM-25).
-# HA is now: hair_growth OR pimples only.
-
 def evaluate_rotterdam(inp):
     oa  = bool(inp.get("cycle_ri", 0))
     ha  = bool(
@@ -78,15 +71,15 @@ def evaluate_rotterdam(inp):
     )
     fl  = inp.get("follicle no. (l)", 0) or 0
     fr  = inp.get("follicle no. (r)", 0) or 0
-    pco = (fl >= 12) or (fr >= 12)
-    return oa, ha, pco
+    pcom = (fl >= 12) or (fr >= 12)
+    return oa, ha, pcom
 
 
-def classify_phenotype_rule(oa, ha, pco):
-    if   oa and ha and pco: return "A"
+def classify_phenotype_rule(oa, ha, pcom):
+    if   oa and ha and pcom: return "A"
     elif oa and ha:          return "B"
-    elif ha and pco:         return "C"
-    elif oa and pco:         return "D"
+    elif ha and pcom:        return "C"
+    elif oa and pcom:        return "D"
     else:                    return None
 
 
@@ -123,25 +116,24 @@ PHENOTYPE_INFO = {
 # ─────────────────────────────────────────────────────────
 # SESSION STATE INIT
 # ─────────────────────────────────────────────────────────
-# Sections: anthropometric, vitals, menstrual, labs, ultrasound, symptoms
 SECTIONS = ["anthropometric", "vitals", "menstrual", "labs", "ultrasound", "symptoms"]
 SECTION_LABELS = {
-    "anthropometric": ("01", "Anthropometric Measurements", "Height, weight, BMI, body ratios"),
-    "vitals":         ("02", "Vitals",                      "Pulse and blood pressure"),
+    "anthropometric": ("01", "Anthropometric Measurements",      "Height, weight, BMI, body ratios"),
+    "vitals":         ("02", "Vitals",                           "Pulse and blood pressure"),
     "menstrual":      ("03", "Menstrual & Reproductive History", "Cycle regularity, pregnancy history"),
-    "labs":           ("04", "Laboratory Values",           "Beta-HCG I, AMH, Random Blood Sugar"),
-    "ultrasound":     ("05", "Ultrasound Findings",         "Follicle count (left & right ovary)"),
-    "symptoms":       ("06", "Clinical Symptoms",           "Self-reported signs and lifestyle"),
+    "labs":           ("04", "Laboratory Values",                "Beta-HCG I, AMH, Random Blood Sugar"),
+    "ultrasound":     ("05", "Ultrasound Findings",              "Follicle count (left & right ovary)"),
+    "symptoms":       ("06", "Clinical Symptoms",                "Self-reported signs and lifestyle"),
 }
 
 DEFAULTS = {
-    "active_section": 0,
-    "section_data": {},
-    "app_step": "overview",
-    "pcos_result": None,
-    "phenotype_result": None,
+    "active_section":  0,
+    "section_data":    {},
+    "app_step":        "overview",
+    "pcos_result":     None,
+    "phenotype_result":None,
     "rotterdam_flags": None,
-    "inputs": {},
+    "inputs":          {},
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
@@ -227,23 +219,118 @@ def predict_phenotype(inp):
 
 def compute_shap_values(inp):
     try:
-        model    = p2_model.named_steps["clf"]       # RandomForestClassifier
-        selector = p2_model.named_steps["tomim"]     # TOMIMSelector
+        import shap
+
+        model    = p2_model.named_steps["clf"]
+        selector = p2_model.named_steps["tomim"]
 
         selected_names = [P2_FEATURES[i] for i in selector.selected_idx_]
 
-        # RandomForest uses feature_importances_ (Gini importance), not get_booster()
-        importances = model.feature_importances_
+        X = np.array([[inp.get(c, np.nan) for c in P2_FEATURES]])
 
-        scores = {}
-        for i, name in enumerate(selected_names):
-            if i < len(importances):
-                scores[name] = float(importances[i])
+        for step_name, step_obj in p2_model.steps:
+            if step_name == "clf":
+                break
+            if not hasattr(step_obj, "transform"):
+                continue
+            X = step_obj.transform(X)
+            if step_name == "tomim":
+                break
 
-        return scores, None
+        explainer   = shap.TreeExplainer(model)
+        shap_values = explainer(X)
+
+        return shap_values, selected_names, None
 
     except Exception:
-        return None, traceback.format_exc()
+        return None, None, traceback.format_exc()
+
+
+def get_shap_driver_features(inp, ph, top_n=6):
+    """
+    Extract top-N features driving the predicted phenotype from SHAP values.
+    Returns list of (label, patient_value, shap_value, clinical_ref) tuples.
+    Falls back to hardcoded list if SHAP fails.
+    """
+    LABEL_MAP = {
+        "i   beta-hcg(miu/ml)": "β-HCG I",
+        "amh (ng/ml)":           "AMH",
+        "rbs (mg/dl)":           "RBS",
+        "follicle no. (l)":      "Follicles L",
+        "follicle no. (r)":      "Follicles R",
+        "waist:hip ratio":       "Waist:Hip",
+        "bmi":                   "BMI",
+        "cycle (2/4)":           "Cycle",
+        "weight gain (1/0)":     "Weight Gain",
+        "hair growth (1/0)":     "Hair Growth",
+        "pimples (1/0)":         "Pimples",
+        "skin darkening (1/0)":  "Skin Darkening",
+        "fast food (1/0)":       "Fast Food",
+        "reg.exercise (1/0)":    "Exercise",
+        "bp _systolic (mmhg)":   "BP Systolic",
+        "bp _diastolic (mmhg)":  "BP Diastolic",
+        "pulse rate (bpm)":      "Pulse Rate",
+        "waist (inch)":          "Waist",
+        "hip (inch)":            "Hip",
+        "blood group":           "Blood Group",
+        "marraige status (yrs)": "Marriage (yrs)",
+        "pregnant (1/0)":        "Pregnant",
+        "no. of abortions":      "Abortions",
+        "age":                   "Age",
+        "weight":                "Weight",
+        "height":                "Height",
+    }
+    # Clinical reference thresholds for % display
+    REF_MAP = {
+        "amh (ng/ml)":           3.5,
+        "rbs (mg/dl)":           140.0,
+        "follicle no. (l)":      12.0,
+        "follicle no. (r)":      12.0,
+        "waist:hip ratio":       0.85,
+        "bmi":                   24.9,
+        "i   beta-hcg(miu/ml)":  5.0,
+        "bp _systolic (mmhg)":   120.0,
+        "bp _diastolic (mmhg)":  80.0,
+        "pulse rate (bpm)":      100.0,
+        "waist (inch)":          35.0,
+        "hip (inch)":            45.0,
+        "age":                   40.0,
+        "weight":                80.0,
+        "height":                170.0,
+    }
+
+    shap_values, selected_names, err = compute_shap_values(inp)
+
+    if shap_values is not None:
+        class_order = ["A", "B", "C", "D"]
+        class_idx   = class_order.index(ph)
+        sv_class    = shap_values[:, :, class_idx]
+        raw_shap    = sv_class[0].values.tolist()
+
+        paired = sorted(
+            zip(raw_shap, selected_names),
+            key=lambda x: abs(x[0]),
+            reverse=True
+        )[:top_n]
+
+        result = []
+        for shap_val, feat_key in paired:
+            label   = LABEL_MAP.get(feat_key, feat_key)
+            val     = inp.get(feat_key, 0) or 0
+            ref     = REF_MAP.get(feat_key, None)
+            result.append((label, val, shap_val, ref))
+        return result, True
+    else:
+        # Fallback: hardcoded clinical drivers
+        fallback = [
+            ("AMH",         inp.get("amh (ng/ml)", 0) or 0,         None, 3.5),
+            ("β-HCG I",     inp.get("i   beta-hcg(miu/ml)", 0) or 0, None, 5.0),
+            ("Follicles L", inp.get("follicle no. (l)", 0) or 0,     None, 12.0),
+            ("Follicles R", inp.get("follicle no. (r)", 0) or 0,     None, 12.0),
+            ("Waist:Hip",   inp.get("waist:hip ratio", 0) or 0,      None, 0.85),
+            ("RBS",         inp.get("rbs (mg/dl)", 0) or 0,          None, 140.0),
+        ]
+        return [(l, v, None, r) for l, v, _, r in fallback], False
 
 
 def reset():
@@ -251,13 +338,31 @@ def reset():
         st.session_state[k] = v if not isinstance(v, dict) else {}
 
 # ─────────────────────────────────────────────────────────
+# KPI NUMBER FORMATTER — FIX Q4
+# ─────────────────────────────────────────────────────────
+def fmt_kpi(val):
+    """Smart formatter: never use scientific notation, show enough precision."""
+    try:
+        v = float(val)
+        if v == int(v) and abs(v) < 10000:
+            return str(int(v))
+        elif abs(v) >= 100:
+            return f"{v:.1f}"
+        elif abs(v) >= 10:
+            return f"{v:.2f}"
+        else:
+            return f"{v:.3f}".rstrip('0').rstrip('.')
+    except:
+        return str(val)
+
+# ─────────────────────────────────────────────────────────
 # SIDEBAR HELPERS
 # ─────────────────────────────────────────────────────────
 CHECK = '<span class="nav-check">&#10003;</span>'
 
 def _nav_row(num, label, state):
-    css = f"nav-{state}"
-    check = CHECK if state == "done" else ""
+    css         = f"nav-{state}"
+    check       = CHECK if state == "done" else ""
     badge_extra = ' style="background:rgba(124,82,204,0.2);color:#b08af5;"' if state == "done" else ""
     return (
         f'<div class="nav-section {css}">'
@@ -269,7 +374,7 @@ def _nav_row(num, label, state):
 
 def _pipeline_stages(rule_state, p2_state, dash_state="locked"):
     def stage(num, title, desc, state):
-        css = f"pipeline-stage stage-{state}"
+        css   = f"pipeline-stage stage-{state}"
         check = CHECK if state == "done" else ""
         return (
             f'<div class="{css}">'
@@ -281,10 +386,10 @@ def _pipeline_stages(rule_state, p2_state, dash_state="locked"):
             f'{check}'
             f'</div>'
         )
-    html = '<div class="pipeline-label">Diagnostic Pipeline</div>'
-    html += stage("R1", "Rotterdam Rules",          "Criteria-based PCOS detection", rule_state)
-    html += stage("P2", "Phenotype Classification", "Types A / B / C / D",           p2_state)
-    html += stage("DB", "Clinical Dashboard",       "Charts, importance & summary",  dash_state)
+    html  = '<div class="pipeline-label">Diagnostic Pipeline</div>'
+    html += stage("01", "Rotterdam Rules",          "Criteria-based PCOS detection", rule_state)
+    html += stage("02", "Phenotype Classification", "Types A / B / C / D",           p2_state)
+    html += stage("03", "Clinical Dashboard",       "Charts, importance & summary",  dash_state)
     st.markdown(html, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────
@@ -417,6 +522,7 @@ if app_step == "overview":
         f'text-transform:uppercase;">Fig. 1 — Normal vs. Polycystic Ovarian Morphology</span>'
         f'</div>'
         f'</div>'
+        '<div class="ov-rotterdam-grid">' + rotterdam_html + '</div>'
         '<div class="ov-rotterdam-rule">'
         '<strong>Rotterdam criteria</strong> &mdash; at least <strong>2 of the 3</strong> features above '
         'must be present for diagnosis. Other causes of hyperandrogenism must be excluded prior to classification.'
@@ -442,7 +548,7 @@ if app_step == "overview":
         '<span class="ov-inline-pill">Stage 1 — Rotterdam Rules</span> applies the official clinical '
         'criteria to determine whether PCOS is present and which phenotype best fits the data. '
         '<span class="ov-inline-pill">Stage 2 — ML Model</span> then confirms and refines the '
-        'phenotype classification using a trained XGBoost pipeline, with confidence scores and a '
+        'phenotype classification using a trained Random Forest pipeline, with confidence scores and a '
         'full clinical dashboard.'
         '</p>'
         '</div>',
@@ -493,7 +599,7 @@ if app_step == "overview":
           "Polycystic ovarian morphology on ultrasound", "LH and AMH frequently elevated"],
          "Highest associated metabolic risk &middot; All 3 criteria met"),
         ("B", "#b83232", "rgba(184,50,50,0.08)", "#8a2020",
-         "Classic without PCOS",
+         "Classic without PCOM",
          "Anovulation + Hyperandrogenism &middot; Normal ovarian morphology",
          "Cycle irregularity and androgen excess are present, but ovarian morphology on ultrasound is within normal limits.",
          ["Irregular or absent menstrual cycles", "Clinical or biochemical hyperandrogenism",
@@ -524,8 +630,7 @@ if app_step == "overview":
                 feats_html += (
                     '<div class="ov-ph-feat">'
                     '<span class="ov-ph-dot" style="background:' + color + ';"></span>'
-                    + f +
-                    '</div>'
+                    + f + '</div>'
                 )
             card_html = (
                 '<div class="ov-ph-card">'
@@ -535,8 +640,7 @@ if app_step == "overview":
                 '<div>'
                 '<div class="ov-ph-label">Phenotype ' + ph + ' &mdash; ' + sublabel + '</div>'
                 '<div class="ov-ph-combo">' + combo + '</div>'
-                '</div>'
-                '</div>'
+                '</div></div>'
                 '<p class="ov-ph-desc">' + description + '</p>'
                 '<div class="ov-ph-features">' + feats_html + '</div>'
                 '<div class="ov-ph-note" style="background:' + bg + ';color:' + txt_color + ';">' + note + '</div>'
@@ -552,7 +656,7 @@ if app_step == "overview":
          "The three Rotterdam criteria (OA, HA, PCOM) are evaluated. If at least two criteria are met, PCOS is confirmed and the phenotype (A–D) is determined by the specific combination present.",
          "Rule-based · OA / HA / PCOM flags", "#f5f0fe", "#5a38b0", "rgba(124,82,204,0.25)"),
         ("03", "ML phenotype refinement",
-         "An RandomForest pipeline trained on 26 TOMIM-selected features confirms the phenotype classification with per-class probability scores and a full clinical dashboard.",
+         "A Random Forest pipeline trained on 26 TOMIM-selected features confirms the phenotype classification with per-class probability scores and a full clinical dashboard.",
          "Multi-class · A / B / C / D", "#f5f0fe", "#5a38b0", "rgba(124,82,204,0.25)"),
     ]
     how_html = ""
@@ -605,7 +709,6 @@ elif app_step == "form":
             nxt = st.form_submit_button(next_label, use_container_width=True)
         return back, nxt
 
-    # ── SECTION 0: ANTHROPOMETRIC ───────────────────────
     if active_sec == 0:
         with st.form("sec_0"):
             st.markdown("""<div class="section-card"><div class="section-header">
@@ -674,7 +777,6 @@ elif app_step == "form":
                 })
                 st.session_state.active_section = 1; st.rerun()
 
-    # ── SECTION 1: VITALS ────────────────────────────────
     elif active_sec == 1:
         with st.form("sec_1"):
             st.markdown("""<div class="section-card"><div class="section-header">
@@ -700,7 +802,6 @@ elif app_step == "form":
                 st.session_state.active_section = 2; st.rerun()
         if back: st.session_state.active_section = 0; st.rerun()
 
-    # ── SECTION 2: MENSTRUAL ─────────────────────────────
     elif active_sec == 2:
         with st.form("sec_2"):
             st.markdown("""<div class="section-card"><div class="section-header">
@@ -726,20 +827,17 @@ elif app_step == "form":
                 st.error("Some fields are incomplete. Please review all inputs before continuing.")
             else:
                 sd.update({
-                    "cycle_ri_label":cycle_ri,
-                    "cycle_ri":1 if cycle_ri=="Irregular" else 0,
-                    "cycle_24":4 if cycle_ri=="Irregular" else 2,
-                    "marriage_yr":marriage,
-                    "pregnant_label":pregnant,
-                    "pregnant":1 if pregnant=="Yes" else 0,
-                    "abortions":abortions,
+                    "cycle_ri_label": cycle_ri,
+                    "cycle_ri":       1 if cycle_ri=="Irregular" else 0,
+                    "cycle_24":       4 if cycle_ri=="Irregular" else 2,
+                    "marriage_yr":    marriage,
+                    "pregnant_label": pregnant,
+                    "pregnant":       1 if pregnant=="Yes" else 0,
+                    "abortions":      abortions,
                 })
                 st.session_state.active_section = 3; st.rerun()
         if back: st.session_state.active_section = 1; st.rerun()
 
-    # ── SECTION 3: LABS (TOMIM-25 ONLY) ─────────────────
-    # Kept: beta-hcg I, AMH, RBS
-    # Removed: beta-hcg II, FSH, LH, TSH, PRL, Hemoglobin, Vitamin D3, Progesterone
     elif active_sec == 3:
         with st.form("sec_3"):
             st.markdown("""<div class="section-card"><div class="section-header">
@@ -761,17 +859,10 @@ elif app_step == "form":
             if missing:
                 st.error("Some fields are incomplete. Please review all inputs before continuing.")
             else:
-                sd.update({
-                    "beta_hcg_i": beta_hcg_i,
-                    "amh":        amh,
-                    "rbs":        rbs,
-                })
+                sd.update({"beta_hcg_i":beta_hcg_i, "amh":amh, "rbs":rbs})
                 st.session_state.active_section = 4; st.rerun()
         if back: st.session_state.active_section = 2; st.rerun()
 
-    # ── SECTION 4: ULTRASOUND (TOMIM-25 ONLY) ───────────
-    # Kept: follicle no. L, follicle no. R
-    # Removed: avg follicle size L/R, endometrium thickness
     elif active_sec == 4:
         with st.form("sec_4"):
             st.markdown("""<div class="section-card"><div class="section-header">
@@ -792,15 +883,10 @@ elif app_step == "form":
             if missing:
                 st.error("Some fields are incomplete. Please review all inputs before continuing.")
             else:
-                sd.update({
-                    "follicle_l": follicle_l,
-                    "follicle_r": follicle_r,
-                })
+                sd.update({"follicle_l":follicle_l, "follicle_r":follicle_r})
                 st.session_state.active_section = 5; st.rerun()
         if back: st.session_state.active_section = 3; st.rerun()
 
-    # ── SECTION 5: SYMPTOMS (TOMIM-25 ONLY) ─────────────
-    # Kept: weight gain, hair growth, pimples, fast food, exercise
     elif active_sec == 5:
         with st.form("sec_5"):
             st.markdown("""<div class="section-card"><div class="section-header">
@@ -810,70 +896,66 @@ elif app_step == "form":
             </div>""", unsafe_allow_html=True)
 
             c1, c2, c3 = st.columns(3)
-            yn = ["No","Yes"]
-            weight_gain = c1.radio("Weight Gain?",         yn, index=yn.index(sd.get("weight_gain_label","No")), horizontal=True)
-            hair_growth = c2.radio("Excess Hair Growth?",  yn, index=yn.index(sd.get("hair_growth_label","No")), horizontal=True)
-            pimples     = c3.radio("Pimples / Acne?",      yn, index=yn.index(sd.get("pimples_label","No")),     horizontal=True)
+            yn          = ["No","Yes"]
+            weight_gain = c1.radio("Weight Gain?",        yn, index=yn.index(sd.get("weight_gain_label","No")), horizontal=True)
+            hair_growth = c2.radio("Excess Hair Growth?", yn, index=yn.index(sd.get("hair_growth_label","No")), horizontal=True)
+            pimples     = c3.radio("Pimples / Acne?",     yn, index=yn.index(sd.get("pimples_label","No")),     horizontal=True)
 
             c1, c2, c3 = st.columns(3)
             fast_food = c1.radio("Fast Food (regularly)?", yn, index=yn.index(sd.get("fast_food_label","No")), horizontal=True)
             exercise  = c2.radio("Regular Exercise?",      yn, index=yn.index(sd.get("exercise_label","No")),  horizontal=True)
-            skin_dark   = c3.radio("Skin Darkening?",      yn, index=yn.index(sd.get("skin_dark_label","No")),   horizontal=True)
+            skin_dark = c3.radio("Skin Darkening?",        yn, index=yn.index(sd.get("skin_dark_label","No")), horizontal=True)
 
             st.markdown("</div>", unsafe_allow_html=True)
             back, nxt = nav_buttons("sec_5", 4, "Run Diagnostic")
 
         if nxt:
             sd.update({
-                "weight_gain_label": weight_gain, "weight_gain": 1 if weight_gain=="Yes" else 0,
-                "hair_growth_label": hair_growth, "hair_growth": 1 if hair_growth=="Yes" else 0,
-                "pimples_label":     pimples,     "pimples":     1 if pimples=="Yes" else 0,
-                "skin_dark_label":skin_dark,     "skin_darkening":1 if skin_dark=="Yes" else 0,
-                "fast_food_label":   fast_food,   "fast_food":   1 if fast_food=="Yes" else 0,
-                "exercise_label":    exercise,    "exercise":    1 if exercise=="Yes" else 0,
+                "weight_gain_label": weight_gain, "weight_gain":    1 if weight_gain=="Yes" else 0,
+                "hair_growth_label": hair_growth, "hair_growth":    1 if hair_growth=="Yes" else 0,
+                "pimples_label":     pimples,     "pimples":        1 if pimples=="Yes"     else 0,
+                "skin_dark_label":   skin_dark,   "skin_darkening": 1 if skin_dark=="Yes"   else 0,
+                "fast_food_label":   fast_food,   "fast_food":      1 if fast_food=="Yes"   else 0,
+                "exercise_label":    exercise,    "exercise":       1 if exercise=="Yes"    else 0,
             })
             s = sd
 
-            # ── Build unified input dict (25 TOMIM features + extras for display) ──
             inp = {
-                # 25 TOMIM features (exact column names P2 expects)
-                "age":                  s["age"],
-                "weight":               s["weight"],
-                "height":               s["height"],
-                "bmi":                  s["bmi"],
-                "blood group":          s["bg_code"],
-                "pulse rate (bpm)":     s["pulse"],
-                "cycle (2/4)":          s["cycle_24"],
-                "marraige status (yrs)":s["marriage_yr"],
-                "pregnant (1/0)":       s["pregnant"],
-                "no. of abortions":     s["abortions"],
-                "i   beta-hcg(miu/ml)": s["beta_hcg_i"],
-                "hip (inch)":           s["hip"],
-                "waist (inch)":         s["waist"],
-                "waist:hip ratio":      s["whr"],
-                "amh (ng/ml)":          s["amh"],
-                "rbs (mg/dl)":          s["rbs"],
-                "weight gain (1/0)":    s["weight_gain"],
-                "hair growth (1/0)":    s["hair_growth"],
-                "pimples (1/0)":        s["pimples"],
-                "fast food (1/0)":      s["fast_food"],
-                "reg.exercise (1/0)":   s["exercise"],
-                "bp _systolic (mmhg)":  s["bp_sys"],
-                "bp _diastolic (mmhg)": s["bp_dia"],
-                "follicle no. (l)":     s["follicle_l"],
-                "follicle no. (r)":     s["follicle_r"],
-                # Extra fields needed by rule engine and display
-                "cycle_ri":             s["cycle_ri"],
-                "skin darkening (1/0)": s["skin_darkening"],
+                "age":                   s["age"],
+                "weight":                s["weight"],
+                "height":                s["height"],
+                "bmi":                   s["bmi"],
+                "blood group":           s["bg_code"],
+                "pulse rate (bpm)":      s["pulse"],
+                "cycle (2/4)":           s["cycle_24"],
+                "marraige status (yrs)": s["marriage_yr"],
+                "pregnant (1/0)":        s["pregnant"],
+                "no. of abortions":      s["abortions"],
+                "i   beta-hcg(miu/ml)":  s["beta_hcg_i"],
+                "hip (inch)":            s["hip"],
+                "waist (inch)":          s["waist"],
+                "waist:hip ratio":       s["whr"],
+                "amh (ng/ml)":           s["amh"],
+                "rbs (mg/dl)":           s["rbs"],
+                "weight gain (1/0)":     s["weight_gain"],
+                "hair growth (1/0)":     s["hair_growth"],
+                "pimples (1/0)":         s["pimples"],
+                "fast food (1/0)":       s["fast_food"],
+                "reg.exercise (1/0)":    s["exercise"],
+                "bp _systolic (mmhg)":   s["bp_sys"],
+                "bp _diastolic (mmhg)":  s["bp_dia"],
+                "follicle no. (l)":      s["follicle_l"],
+                "follicle no. (r)":      s["follicle_r"],
+                "cycle_ri":              s["cycle_ri"],
+                "skin darkening (1/0)":  s["skin_darkening"],
             }
             st.session_state.inputs = inp
 
-            # ── Rotterdam rule-based detection ──────────────────────────────
-            oa, ha, pco = evaluate_rotterdam(inp)
-            rule_phenotype = classify_phenotype_rule(oa, ha, pco)
+            oa, ha, pcom   = evaluate_rotterdam(inp)
+            rule_phenotype = classify_phenotype_rule(oa, ha, pcom)
             pcos_positive  = rule_phenotype is not None
             st.session_state.pcos_result     = pcos_positive
-            st.session_state.rotterdam_flags = (oa, ha, pco)
+            st.session_state.rotterdam_flags = (oa, ha, pcom)
 
             if pcos_positive:
                 ph_ml, probs = predict_phenotype(inp)
@@ -890,9 +972,9 @@ elif app_step == "form":
 # RESULT PAGE
 # ─────────────────────────────────────────────────────────
 elif app_step == "result":
-    pcos_pos      = st.session_state.pcos_result
-    oa, ha, pco   = st.session_state.rotterdam_flags
-    inp           = st.session_state.inputs
+    pcos_pos     = st.session_state.pcos_result
+    oa, ha, pcom = st.session_state.rotterdam_flags
+    inp          = st.session_state.inputs
 
     def crit_badge(label, met, detail):
         if met:
@@ -914,21 +996,21 @@ elif app_step == "result":
 
     oa_detail  = "Irregular menstrual cycle" if oa else "Regular menstrual cycle"
     ha_detail  = "Hair growth / acne / skin darkening present" if ha else "No hyperandrogenism signs"
-    pco_detail = f"Follicles L:{fl} R:{fr} (≥12 threshold)" if pco else f"Follicles L:{fl} R:{fr} (below threshold)"
+    pco_detail = f"Follicles L:{fl} R:{fr} (≥12 threshold)" if pcom else f"Follicles L:{fl} R:{fr} (below threshold)"
 
     badges_html = (
         '<div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-bottom:1.2rem;">'
-        + crit_badge("OA — Anovulation",         oa,  oa_detail)
-        + crit_badge("HA — Hyperandrogenism",    ha,  ha_detail)
-        + crit_badge("PCO — Polycystic Ovaries", pco, pco_detail)
+        + crit_badge("OA — Anovulation",          oa,   oa_detail)
+        + crit_badge("HA — Hyperandrogenism",     ha,   ha_detail)
+        + crit_badge("PCOM — Polycystic Ovaries", pcom, pco_detail)
         + '</div>'
     )
     st.markdown(badges_html, unsafe_allow_html=True)
 
     if pcos_pos:
-        ph, probs   = st.session_state.phenotype_result
-        info        = PHENOTYPE_INFO[ph]
-        ph_colors   = {"A":"#7c52cc","B":"#b83232","C":"#1a6e3c","D":"#9a7010"}
+        ph, probs = st.session_state.phenotype_result
+        info      = PHENOTYPE_INFO[ph]
+        ph_colors = {"A":"#7c52cc","B":"#b83232","C":"#1a6e3c","D":"#9a7010"}
 
         st.markdown(f"""
         <div class="result-positive" style="text-align:center;padding:1.6rem 2rem;">
@@ -943,22 +1025,15 @@ elif app_step == "result":
         """, unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
-        # ═══════════════════════════════════════════════════════════════════════════
-# IMPROVEMENT 1 — Result page col1 / col2
-# Replace the existing col1 / col2 block inside `elif app_step == "result":`
-# after the result-positive card and the <br> spacer.
-# ═══════════════════════════════════════════════════════════════════════════
- 
         col1, col2 = st.columns(2, gap="large")
- 
+
         with col1:
-            # ── Rotterdam criteria met ──────────────────────────────────────
             crit_items = []
-            if oa:  crit_items.append(("OA", "Oligo / Anovulation",    "Irregular menstrual cycle confirmed"))
-            if ha:  crit_items.append(("HA", "Hyperandrogenism",        "Hair growth, acne, or skin darkening"))
-            if pco: crit_items.append(("PCO","Polycystic Ovaries",      f"Follicles L:{fl}  R:{fr} (≥12 threshold)"))
- 
-            crit_html = '<div style="margin-bottom:1.2rem;">'
+            if oa:   crit_items.append(("OA",   "Oligo / Anovulation", "Irregular menstrual cycle confirmed"))
+            if ha:   crit_items.append(("HA",   "Hyperandrogenism",    "Hair growth, acne, or skin darkening"))
+            if pcom: crit_items.append(("PCOM", "Polycystic Ovaries",  f"Follicles L:{fl}  R:{fr} (≥12 threshold)"))
+
+            crit_html  = '<div style="margin-bottom:1.2rem;">'
             crit_html += (
                 '<div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.13em;'
                 'color:#9580b8;font-weight:700;margin-bottom:0.6rem;">Rotterdam Criteria Met</div>'
@@ -974,13 +1049,11 @@ elif app_step == "result":
                     f'<div>'
                     f'<div style="font-size:0.8rem;font-weight:600;color:#1e1040;line-height:1.2;">{title}</div>'
                     f'<div style="font-size:0.7rem;color:#9580b8;margin-top:1px;">{detail}</div>'
-                    f'</div>'
-                    f'</div>'
+                    f'</div></div>'
                 )
             crit_html += '</div>'
             st.markdown(crit_html, unsafe_allow_html=True)
- 
-            # ── Phenotype clinical features ─────────────────────────────────
+
             feat_html = (
                 '<div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.13em;'
                 'color:#9580b8;font-weight:700;margin-bottom:0.6rem;">Phenotype Clinical Features</div>'
@@ -994,35 +1067,30 @@ elif app_step == "result":
                     f'{feat}</div>'
                 )
             st.markdown(feat_html, unsafe_allow_html=True)
- 
+
         with col2:
-            # ── P2 probability bars ─────────────────────────────────────────
-            ph_colors = {"A": "#6c3fc5", "B": "#9f1239", "C": "#166534", "D": "#92400e"}
- 
+            ph_colors = {"A":"#6c3fc5","B":"#9f1239","C":"#166534","D":"#92400e"}
             st.markdown(
                 '<div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:0.13em;'
                 'color:#9580b8;font-weight:700;margin-bottom:0.4rem;">P2 Model — Phenotype Confidence</div>'
                 '<p style="font-size:0.73rem;color:#9580b8;margin-bottom:0.9rem;line-height:1.5;">'
-                'Rotterdam rule-based classification confirmed. Bars show the XGBoost P2 pipeline\'s '
+                'Rotterdam rule-based classification confirmed. Bars show the Random Forest P2 pipeline\'s '
                 'per-class probability scores.</p>',
                 unsafe_allow_html=True,
             )
- 
-            for pk in ["A", "B", "C", "D"]:
-                pv  = probs[pk]
-                bw  = int(pv * 100)
-                is_selected = pk == ph
-                opacity = "1" if is_selected else "0.45"
-                weight  = "700" if is_selected else "400"
+            for pk in ["A","B","C","D"]:
+                pv        = probs[pk]
+                bw        = int(pv * 100)
+                is_sel    = pk == ph
+                opacity   = "1" if is_sel else "0.45"
+                weight    = "700" if is_sel else "400"
                 bar_color = ph_colors[pk]
- 
                 st.markdown(f"""
                 <div style="margin-bottom:0.85rem;opacity:{opacity};">
-                  <div style="display:flex;justify-content:space-between;align-items:baseline;
-                              margin-bottom:4px;">
+                  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">
                     <div style="display:flex;align-items:center;gap:0.5rem;">
-                      <span style="width:9px;height:9px;border-radius:50%;
-                                   background:{bar_color};display:inline-block;flex-shrink:0;"></span>
+                      <span style="width:9px;height:9px;border-radius:50%;background:{bar_color};
+                                   display:inline-block;flex-shrink:0;"></span>
                       <span style="font-size:0.8rem;font-weight:{weight};color:#2e1a58;">
                         Phenotype {pk} &nbsp;
                         <span style="font-weight:400;color:#9580b8;font-size:0.72rem;">
@@ -1033,12 +1101,12 @@ elif app_step == "result":
                     <span style="font-size:0.8rem;font-weight:{weight};color:{bar_color};">{bw}%</span>
                   </div>
                   <div style="background:#ede6f5;border-radius:4px;height:6px;overflow:hidden;">
-                    <div style="width:{bw}%;height:6px;border-radius:4px;
-                                background:{bar_color};transition:width 0.4s ease;"></div>
+                    <div style="width:{bw}%;height:6px;border-radius:4px;background:{bar_color};
+                                transition:width 0.4s ease;"></div>
                   </div>
                 </div>
                 """, unsafe_allow_html=True)
-                
+
         st.markdown("<br>", unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
@@ -1049,7 +1117,7 @@ elif app_step == "result":
                 reset(); st.rerun()
 
     else:
-        criteria_met = sum([oa, ha, pco])
+        criteria_met = sum([oa, ha, pcom])
         st.markdown(f"""
         <div class="result-negative">
             <div class="result-negative-accent">&#10003;</div>
@@ -1074,22 +1142,33 @@ elif app_step == "result":
 # DASHBOARD
 # ─────────────────────────────────────────────────────────
 elif app_step == "dashboard":
-    inp       = st.session_state.inputs
-    sd        = st.session_state.section_data
-    ph, probs = st.session_state.phenotype_result
-    info      = PHENOTYPE_INFO[ph]
-    oa, ha, pco = st.session_state.rotterdam_flags
+    inp          = st.session_state.inputs
+    sd           = st.session_state.section_data
+    ph, probs    = st.session_state.phenotype_result
+    info         = PHENOTYPE_INFO[ph]
+    oa, ha, pcom = st.session_state.rotterdam_flags
 
-    C_PURPLE = "#6c3fc5"
-    C_NAVY   = "#1a0e36"
-    C_BORDER = "#e0d5f5"
-    C_TEXT   = "#2e1a58"
-    C_MUTED  = "#9580b8"
-    C_HIGH   = "#b91c1c"
-    C_LOW    = "#c2410c"
-    C_OK     = "#166534"
+    C_PURPLE  = "#6c3fc5"
+    C_NAVY    = "#1a0e36"
+    C_BORDER  = "#e0d5f5"
+    C_TEXT    = "#2e1a58"
+    C_MUTED   = "#9580b8"
+    C_HIGH    = "#b91c1c"
+    C_LOW     = "#c2410c"
+    C_OK      = "#166534"
     FONT_SORA = "Sora, sans-serif"
     FONT_CG   = "Cormorant Garamond, serif"
+
+    # Purple palette for charts — FIX Q1
+    C_PUR_DARK   = "#4a1fa8"   # deep anchor
+    C_PUR_MID    = "#6c3fc5"   # primary
+    C_PUR_BRIGHT = "#9b6fe8"   # mid accent
+    C_PUR_LIGHT  = "#c4a8f5"   # light
+    C_PUR_GHOST  = "#ede6f5"   # background tint
+
+    # Waterfall colours stay red/blue for direction clarity, but use purple for neutral lines
+    C_WF_POS  = "#7c3aed"   # purple-positive (toward phenotype)
+    C_WF_NEG  = "#be185d"   # rose-negative (away from phenotype)
 
     BASE_LAYOUT = dict(
         paper_bgcolor="rgba(0,0,0,0)",
@@ -1139,9 +1218,9 @@ elif app_step == "dashboard":
     section_label("Rotterdam Criteria Summary")
     st.markdown(
         '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;">'
-        + crit_mini("OA — Anovulation",         oa,  "Irregular cycle" if oa else "Regular cycle")
-        + crit_mini("HA — Hyperandrogenism",    ha,  "Signs present" if ha else "No signs")
-        + crit_mini("PCO — Polycystic Ovaries", pco, f"Follicles L:{fl} R:{fr}")
+        + crit_mini("OA — Anovulation",          oa,   "Irregular cycle" if oa else "Regular cycle")
+        + crit_mini("HA — Hyperandrogenism",     ha,   "Signs present" if ha else "No signs")
+        + crit_mini("PCOM — Polycystic Ovaries", pcom, f"Follicles L:{fl} R:{fr}")
         + f'<div style="background:rgba(108,63,197,0.08);border:1.5px solid #7c52cc;border-radius:9px;'
           f'padding:0.5rem 0.9rem;flex:1;min-width:130px;text-align:center;">'
           f'<div style="font-size:0.55rem;text-transform:uppercase;letter-spacing:0.1em;'
@@ -1153,28 +1232,28 @@ elif app_step == "dashboard":
         unsafe_allow_html=True,
     )
 
-    # ── KPI strip — TOMIM-25 labs only ───────────────────
+    # ── KPI strip — FIX Q4: use fmt_kpi instead of :.2g ──
     section_label("Key Biomarkers")
     KPI_DEF = [
-        ("BMI",      sd.get("bmi", 0) or 0,  18.5, 24.9,  "kg/m²"),
-        ("AMH",      sd.get("amh", 0) or 0,   1.0,  3.5,  "ng/mL"),
-        ("RBS",      sd.get("rbs", 0) or 0,  70.0,140.0,  "mg/dl"),
-        ("Waist:Hip",sd.get("whr", 0) or 0,   0.0,  0.85, "ratio"),
-        ("β-HCG I",  sd.get("beta_hcg_i", 0) or 0, 0.0, 5.0, "mIU/mL"),
+        ("BMI",       sd.get("bmi",        0) or 0, 18.5,  24.9,  "kg/m²"),
+        ("AMH",       sd.get("amh",        0) or 0,  1.0,   3.5,  "ng/mL"),
+        ("RBS",       sd.get("rbs",        0) or 0, 70.0, 140.0,  "mg/dl"),
+        ("Waist:Hip", sd.get("whr",        0) or 0,  0.0,   0.85, "ratio"),
+        ("β-HCG I",   sd.get("beta_hcg_i",0) or 0,  0.0,   5.0,  "mIU/mL"),
     ]
 
     def kpi_html(label, val, lo, hi, unit):
-        color = val_status(val, lo, hi)
-        arrow = " ↑" if val > hi else (" ↓" if val < lo else "")
-        try:    display = f"{float(val):.2g}"
-        except: display = str(val)
+        color   = val_status(val, lo, hi)
+        arrow   = " ↑" if val > hi else (" ↓" if val < lo else "")
+        display = fmt_kpi(val)   # ← FIXED: no more :.2g truncation
         return (
             f'<div style="background:#ffffff;border:1px solid {C_BORDER};border-radius:10px;'
             f'padding:0.8rem 0.6rem;text-align:center;height:100%;">'
             f'<div style="font-size:0.55rem;text-transform:uppercase;letter-spacing:0.1em;'
             f'color:{C_MUTED};font-weight:700;margin-bottom:0.3rem;">{label}</div>'
-            f'<div style="font-family:{FONT_CG};font-size:1.55rem;font-weight:600;'
-            f'color:{color};line-height:1;">{display}<span style="font-size:0.7rem;">{arrow}</span></div>'
+            f'<div style="font-family:{FONT_CG};font-size:1.45rem;font-weight:600;'
+            f'color:{color};line-height:1;word-break:break-all;">{display}'
+            f'<span style="font-size:0.68rem;">{arrow}</span></div>'
             f'<div style="font-size:0.58rem;color:{C_MUTED};margin-top:0.15rem;">{unit}</div>'
             f'</div>'
         )
@@ -1185,36 +1264,66 @@ elif app_step == "dashboard":
         unsafe_allow_html=True,
     )
 
-    st.markdown("<div style='height:1.4rem'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:1.6rem'></div>", unsafe_allow_html=True)
 
-    # ── Phenotype donut | Biomarker bar ───────────────────
+    # ── ROW 1: Phenotype donut | Biomarker bar ────────────
     col_ph, col_bio = st.columns([1, 1.65], gap="large")
 
     with col_ph:
         section_label("Phenotype Classification (P2 Model)")
-        ph_colors = {"A": "#6c3fc5", "B": "#9f1239", "C": "#166534", "D": "#92400e"}
+        ph_colors    = {"A":"#6c3fc5","B":"#9f1239","C":"#166534","D":"#92400e"}
         sorted_probs = dict(sorted(probs.items(), key=lambda x: x[1], reverse=True))
         donut_labels = list(sorted_probs.keys())
         donut_vals   = list(sorted_probs.values())
 
+        # ── FIX Q3: textinfo="none", annotations only inside hole ──
         fig_donut = go.Figure(go.Pie(
-            labels=donut_labels, values=donut_vals, hole=0.68,
-            marker=dict(colors=[ph_colors[k] for k in donut_labels], line=dict(color="#ffffff", width=3)),
-            textinfo="percent", textposition="outside",
-            textfont=dict(family=FONT_SORA, size=11, color=C_TEXT),
-            outsidetextfont=dict(family=FONT_SORA, size=11, color=C_TEXT),
-            hovertemplate="<b>Phenotype %{label}</b><br>%{customdata}<br>Probability: %{percent}<extra></extra>",
+            labels=donut_labels,
+            values=donut_vals,
+            hole=0.72,
+            marker=dict(
+                colors=[ph_colors[k] for k in donut_labels],
+                line=dict(color="#faf8fe", width=3),
+            ),
+            textinfo="none",          # ← no slice labels at all — eliminates overlap
+            hovertemplate=(
+                "<b>Phenotype %{label}</b><br>"
+                "%{customdata}<br>"
+                "Probability: %{percent}<extra></extra>"
+            ),
             customdata=[PHENOTYPE_INFO[k]["sublabel"] for k in donut_labels],
-            pull=[0.06 if k == ph else 0 for k in donut_labels],
-            direction="clockwise", rotation=90, showlegend=False,
+            pull=[0.04 if k == ph else 0 for k in donut_labels],
+            direction="clockwise",
+            rotation=270,
+            showlegend=False,
         ))
-        fig_donut.add_annotation(text=f"<b>{ph}</b>", x=0.5, y=0.55,
-            font=dict(family=FONT_CG, size=46, color=C_NAVY), showarrow=False)
-        fig_donut.add_annotation(text=info["sublabel"].replace(" ", "<br>"), x=0.5, y=0.35,
-            font=dict(family=FONT_SORA, size=9, color=C_MUTED), showarrow=False)
-        fig_donut.update_layout(**BASE_LAYOUT, height=300, margin=dict(l=30, r=30, t=30, b=30))
+        # Centre annotations — phenotype letter, %, sublabel
+        fig_donut.add_annotation(
+            text=f"<b>{ph}</b>",
+            x=0.5, y=0.58,
+            font=dict(family=FONT_CG, size=50, color=C_NAVY),
+            showarrow=False, xref="paper", yref="paper",
+        )
+        fig_donut.add_annotation(
+            text=f"{int(probs[ph]*100)}%",
+            x=0.5, y=0.43,
+            font=dict(family=FONT_SORA, size=13, color=info["color"], ),
+            showarrow=False, xref="paper", yref="paper",
+        )
+        fig_donut.add_annotation(
+            text=info["sublabel"].replace(" ", "<br>"),
+            x=0.5, y=0.28,
+            font=dict(family=FONT_SORA, size=8, color=C_MUTED),
+            showarrow=False, xref="paper", yref="paper",
+        )
+        fig_donut.update_layout(
+            **BASE_LAYOUT,
+            height=300,
+            margin=dict(l=10, r=10, t=15, b=10),
+        )
         st.plotly_chart(fig_donut, use_container_width=True, config={"displayModeBar": False})
 
+        # Legend below donut
         legend_html = '<div style="display:flex;flex-wrap:wrap;gap:0.4rem;justify-content:center;margin-top:-0.3rem;">'
         for k in ["A","B","C","D"]:
             bold = "font-weight:700;" if k == ph else "opacity:0.6;"
@@ -1229,21 +1338,20 @@ elif app_step == "dashboard":
 
     with col_bio:
         section_label("Biomarker Status vs. Reference Range")
-        # Dashboard biomarker bar — only TOMIM-25 labs that have known reference ranges
         bm_data = [
-            ("BMI",      sd.get("bmi", 0) or 0,  18.5, 24.9,  "kg/m²"),
-            ("AMH",      sd.get("amh", 0) or 0,   1.0,  3.5,  "ng/mL"),
-            ("RBS",      sd.get("rbs", 0) or 0,  70.0,140.0,  "mg/dl"),
-            ("Waist:Hip",sd.get("whr", 0) or 0,   0.0,  0.85, "ratio"),
-            ("β-HCG I",  sd.get("beta_hcg_i", 0) or 0, 0.0, 5.0, "mIU/mL"),
+            ("BMI",       sd.get("bmi",        0) or 0, 18.5,  24.9,  "kg/m²"),
+            ("AMH",       sd.get("amh",        0) or 0,  1.0,   3.5,  "ng/mL"),
+            ("RBS",       sd.get("rbs",        0) or 0, 70.0, 140.0,  "mg/dl"),
+            ("Waist:Hip", sd.get("whr",        0) or 0,  0.0,   0.85, "ratio"),
+            ("β-HCG I",   sd.get("beta_hcg_i",0) or 0,  0.0,   5.0,  "mIU/mL"),
         ]
-        names    = [d[0] for d in bm_data]
-        vals     = [d[1] for d in bm_data]
-        hi_vals  = [d[3] for d in bm_data]
-        lo_vals  = [d[2] for d in bm_data]
-        units    = [d[4] for d in bm_data]
-        norm_pct = [min(v / hi * 100, 155) if hi else 0 for v, hi in zip(vals, hi_vals)]
-        norm_lo  = [lo / hi * 100 if hi else 0 for lo, hi in zip(lo_vals, hi_vals)]
+        names      = [d[0] for d in bm_data]
+        vals       = [d[1] for d in bm_data]
+        hi_vals    = [d[3] for d in bm_data]
+        lo_vals    = [d[2] for d in bm_data]
+        units      = [d[4] for d in bm_data]
+        norm_pct   = [min(v / hi * 100, 155) if hi else 0 for v, hi in zip(vals, hi_vals)]
+        norm_lo    = [lo / hi * 100 if hi else 0 for lo, hi in zip(lo_vals, hi_vals)]
         status_lbl = ["High ↑" if v > hi else ("Low ↓" if v < lo else "Normal")
                       for v, lo, hi in zip(vals, lo_vals, hi_vals)]
 
@@ -1252,7 +1360,7 @@ elif app_step == "dashboard":
             marker_color="rgba(108,63,197,0.07)", hoverinfo="skip", showlegend=False))
         fig_bio.add_trace(go.Bar(y=names, x=norm_pct, orientation="h",
             marker=dict(color=C_PURPLE, opacity=0.75, line=dict(color="rgba(255,255,255,0.3)", width=0.5)),
-            text=[f"  {v:.3g} {u}  ·  {s}" for v, u, s in zip(vals, units, status_lbl)],
+            text=[f"  {fmt_kpi(v)} {u}  ·  {s}" for v, u, s in zip(vals, units, status_lbl)],
             textposition="outside",
             textfont=dict(family=FONT_SORA, size=9.5, color=C_TEXT),
             hovertemplate="<b>%{y}</b><br>%{text}<extra></extra>"))
@@ -1260,7 +1368,7 @@ elif app_step == "dashboard":
             marker=dict(symbol="line-ns", size=14, color=C_MUTED, line=dict(width=1.5, color=C_MUTED)),
             hoverinfo="skip", showlegend=False))
         fig_bio.update_layout(
-            **BASE_LAYOUT, barmode="overlay", height=280,
+            **BASE_LAYOUT, barmode="overlay", height=300,
             margin=dict(l=0, r=180, t=8, b=8),
             xaxis=dict(**axis_style(),
                 title=dict(text="% of upper reference limit", font=dict(family=FONT_SORA, size=9, color=C_MUTED)),
@@ -1272,195 +1380,376 @@ elif app_step == "dashboard":
         )
         st.plotly_chart(fig_bio, use_container_width=True, config={"displayModeBar": False})
 
-    # ── XAI | Radar ───────────────────────────────────────
-    st.markdown("<div style='height:0.3rem'></div>", unsafe_allow_html=True)
-    section_label("Model Explainability — P2 Random Forest Feature Importance")
+    st.markdown("<div style='height:2rem'></div>", unsafe_allow_html=True)
 
-    with st.spinner("Computing feature importance…"):
-        shap_result, base_or_err = compute_shap_values(inp)
+    # ── ROW 2: SHAP Waterfall | Radar ─────────────────────
+    section_label("Model Explainability — SHAP Waterfall (This Patient)")
+
+    with st.spinner("Computing SHAP values…"):
+        shap_result = compute_shap_values(inp)
+        shap_values, selected_names, shap_err = shap_result
 
     col_imp, col_radar = st.columns([1.4, 1], gap="large")
 
     with col_imp:
-        if shap_result:
-            sorted_imp  = sorted(shap_result.items(), key=lambda x: x[1], reverse=True)[:10]
-            feat_labels = [k for k, _ in sorted_imp]
-            feat_vals   = [v for _, v in sorted_imp]
-            max_v       = max(feat_vals) if feat_vals else 1
-            norm_imp    = [v / max_v * 100 for v in feat_vals]
- 
-            # ── Lollipop / dot-bar hybrid chart ────────────────────────────
-            # Reversed so highest importance is at top
-            y_pos       = list(range(len(feat_labels)))
-            feat_rev    = feat_labels[::-1]
-            norm_rev    = norm_imp[::-1]
-            raw_rev     = feat_vals[::-1]
- 
-            fig_imp = go.Figure()
- 
-            # Horizontal stem lines (thin, muted)
-            for i, (y, x) in enumerate(zip(y_pos, norm_rev)):
-                fig_imp.add_shape(
-                    type="line",
-                    x0=0, x1=x, y0=i, y1=i,
-                    line=dict(
-                        color=f"rgba(108,63,197,{max(0.15, x/100*0.55):.2f})",
-                        width=2,
-                    ),
-                    layer="below",
-                )
- 
-            # Dot markers — size encodes importance
-            dot_sizes = [max(8, v / 100 * 22) for v in norm_rev]
-            dot_colors = [
-                f"rgba(108,63,197,{max(0.4, v/100*0.9):.2f})" for v in norm_rev
-            ]
- 
-            fig_imp.add_trace(go.Scatter(
-                x=norm_rev,
-                y=y_pos,
-                mode="markers+text",
-                marker=dict(
-                    size=dot_sizes,
-                    color=dot_colors,
-                    line=dict(color="#ffffff", width=1.5),
-                ),
-                text=[f" {v:.1f}" for v in norm_rev],
-                textposition="middle right",
-                textfont=dict(family=FONT_SORA, size=9.5, color=C_TEXT),
-                hovertemplate=(
-                    "<b>%{customdata[0]}</b><br>"
-                    "Normalised gain: %{x:.1f}<br>"
-                    "Raw gain: %{customdata[1]:.2f}<extra></extra>"
-                ),
-                customdata=list(zip(feat_rev, [f"{v:.2f}" for v in raw_rev])),
-            ))
- 
-            # Top feature callout annotation
-            top_feat = feat_rev[-1]  # index -1 = last = top after reversal (highest)
-            # Actually feat_rev[0] is the lowest, feat_rev[-1] is highest shown at top
-            # y_pos[-1] is the top row
-            fig_imp.add_annotation(
-                x=norm_rev[-1],
-                y=y_pos[-1],
-                text=f"  ← top feature",
-                showarrow=False,
-                font=dict(family=FONT_SORA, size=8, color=C_MUTED),
-                xanchor="left",
-                yanchor="middle",
-                xshift=dot_sizes[-1] / 2 + 28,
-            )
- 
-            fig_imp.update_layout(
-                **BASE_LAYOUT,
-                height=390,
-                margin=dict(l=0, r=90, t=10, b=30),
-                xaxis=dict(
-                    **axis_style(),
-                    range=[0, 130],
-                    title=dict(
-                        text="Relative importance — normalised gain (0 = lowest, 100 = highest)",
-                        font=dict(family=FONT_SORA, size=9, color=C_MUTED),
-                    ),
-                    ticksuffix="",
-                ),
-                yaxis=dict(
-                    tickmode="array",
-                    tickvals=y_pos,
-                    ticktext=feat_rev,
-                    tickfont=dict(family=FONT_SORA, size=10.5, color=C_TEXT),
-                    showgrid=False,
-                    autorange=False,
-                    range=[-0.6, len(feat_labels) - 0.4],
-                ),
-                showlegend=False,
-            )
-            st.plotly_chart(fig_imp, use_container_width=True, config={"displayModeBar": False})
- 
-            # ── Ranked table below the chart ────────────────────────────────
-            top3 = sorted_imp[:3]
-            rank_html = (
-                '<div style="display:flex;gap:0.5rem;margin-top:-0.4rem;margin-bottom:0.3rem;">'
-            )
-            medals = ["🥇", "🥈", "🥉"]
-            for medal, (fname, fval) in zip(medals, top3):
-                pct = fval / max_v * 100
-                rank_html += (
-                    f'<div style="flex:1;background:#ffffff;border:1px solid {C_BORDER};'
-                    f'border-radius:9px;padding:0.55rem 0.7rem;">'
-                    f'<div style="font-size:0.9rem;margin-bottom:0.15rem;">{medal}</div>'
-                    f'<div style="font-size:0.7rem;font-weight:600;color:{C_TEXT};'
-                    f'line-height:1.3;margin-bottom:0.1rem;">{fname}</div>'
-                    f'<div style="font-size:0.65rem;color:{C_MUTED};">{pct:.1f} / 100</div>'
-                    f'</div>'
-                )
-            rank_html += "</div>"
-            st.markdown(rank_html, unsafe_allow_html=True)
- 
+        if shap_values is not None:
+            class_order = ["A", "B", "C", "D"]
+            class_idx   = class_order.index(ph)
+            sv_class    = shap_values[:, :, class_idx]
+
+            label_map = {
+                "i   beta-hcg(miu/ml)": "β-HCG I",
+                "amh (ng/ml)":          "AMH",
+                "rbs (mg/dl)":          "RBS",
+                "follicle no. (l)":     "Follicles L",
+                "follicle no. (r)":     "Follicles R",
+                "waist:hip ratio":      "Waist : Hip",
+                "bmi":                  "BMI",
+                "cycle (2/4)":          "Cycle",
+                "weight gain (1/0)":    "Weight Gain",
+                "hair growth (1/0)":    "Hair Growth",
+                "pimples (1/0)":        "Pimples",
+                "skin darkening (1/0)": "Skin Darkening",
+                "fast food (1/0)":      "Fast Food",
+                "reg.exercise (1/0)":   "Exercise",
+                "bp _systolic (mmhg)":  "BP Systolic",
+                "bp _diastolic (mmhg)": "BP Diastolic",
+                "pulse rate (bpm)":     "Pulse Rate",
+                "waist (inch)":         "Waist",
+                "hip (inch)":           "Hip",
+                "blood group":          "Blood Group",
+                "marraige status (yrs)":"Marriage (yrs)",
+                "pregnant (1/0)":       "Pregnant",
+                "no. of abortions":     "Abortions",
+                "age":                  "Age",
+                "weight":               "Weight",
+                "height":               "Height",
+            }
+
+            raw_shap   = sv_class[0].values.tolist()
+            base_val   = float(sv_class[0].base_values)
+            feat_names = [label_map.get(n, n) for n in selected_names]
+            feat_vals  = [inp.get(c, None) for c in P2_FEATURES
+                          if c in [P2_FEATURES[i] for i in p2_model.named_steps["tomim"].selected_idx_]]
+
+            paired   = sorted(zip(raw_shap, feat_names, feat_vals), key=lambda x: abs(x[0]), reverse=True)[:10]
+            paired   = list(reversed(paired))
+
+            shap_data = json.dumps([
+                {"shap": round(s, 4), "label": l, "val": round(float(v), 3) if v is not None else None}
+                for s, l, v in paired
+            ])
+            ph_color  = ph_colors[ph]
+            pred_prob = int(probs[ph] * 100)
+
+            # ── FIX Q1: Waterfall uses purple palette ──────
+            WATERFALL_HTML = f"""
+<style>
+  .wf-wrap {{
+    font-family: Sora, sans-serif;
+    padding: 4px 0 12px;
+    color: #2e1a58;
+  }}
+  .wf-header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-bottom: 18px;
+    border-bottom: 1.5px solid #ede6f5;
+    padding-bottom: 10px;
+  }}
+  .wf-title {{
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.13em;
+    color: #9580b8;
+  }}
+  .wf-badge {{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: {ph_color}18;
+    border: 1.5px solid {ph_color}55;
+    border-radius: 20px;
+    padding: 3px 10px;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: {ph_color};
+  }}
+  .wf-dot {{ width:7px; height:7px; border-radius:50%; background:{ph_color}; display:inline-block; }}
+  .wf-chart {{ position: relative; }}
+  .wf-row {{
+    display: grid;
+    grid-template-columns: 110px 1fr 56px;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    min-height: 28px;
+  }}
+  .wf-feat {{
+    font-size: 10.5px; color: #4a3a6e; text-align: right;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3;
+  }}
+  .wf-feat-val {{ font-size: 9px; color: #9580b8; display: block; margin-top: 1px; }}
+  .wf-bar-track {{ position: relative; height: 22px; display: flex; align-items: center; }}
+  .wf-bar {{
+    position: absolute; height: 16px; border-radius: 3px;
+    transition: width 0.6s cubic-bezier(.4,0,.2,1);
+    min-width: 3px;
+  }}
+  .wf-connector {{
+    position: absolute; top: 50%; width: 1px; height: 28px;
+    transform: translateY(-50%); opacity: 0.3;
+  }}
+  .wf-shap-val {{ font-size: 10.5px; font-weight: 700; text-align: left; white-space: nowrap; }}
+  .wf-shap-val.pos {{ color: #6c3fc5; }}
+  .wf-shap-val.neg {{ color: #be185d; }}
+  .wf-baseline-row {{
+    display: grid; grid-template-columns: 110px 1fr 56px; gap: 8px;
+    margin-top: 4px; padding-top: 8px; border-top: 1.5px solid #ede6f5; align-items: center;
+  }}
+  .wf-baseline-label {{
+    font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: #9580b8; font-weight: 700; text-align: right;
+  }}
+  .wf-fx-row {{
+    display: grid; grid-template-columns: 110px 1fr 56px; gap: 8px;
+    margin-top: 6px; padding: 8px 0 4px;
+    border-top: 2px solid {ph_color}55; align-items: center;
+  }}
+  .wf-fx-label {{
+    font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: {ph_color}; font-weight: 700; text-align: right;
+  }}
+  .wf-fx-val {{ font-size: 11px; font-weight: 700; color: {ph_color}; }}
+  .wf-legend {{
+    display: flex; gap: 14px; margin-top: 14px; padding-top: 10px; border-top: 1px solid #ede6f5;
+  }}
+  .wf-legend-item {{ display: flex; align-items: center; gap: 5px; font-size: 9.5px; color: #9580b8; }}
+  .wf-legend-swatch {{ width: 22px; height: 7px; border-radius: 2px; }}
+</style>
+
+<div class="wf-wrap">
+  <div class="wf-header">
+    <div class="wf-title">SHAP Waterfall — Phenotype {ph}</div>
+    <div class="wf-badge"><span class="wf-dot"></span>{pred_prob}% confidence</div>
+  </div>
+  <div class="wf-chart" id="wf-chart"></div>
+  <div class="wf-legend">
+    <div class="wf-legend-item">
+      <div class="wf-legend-swatch" style="background:#6c3fc5;opacity:0.8;"></div>
+      Pushes toward Phenotype {ph}
+    </div>
+    <div class="wf-legend-item">
+      <div class="wf-legend-swatch" style="background:#be185d;opacity:0.8;"></div>
+      Pushes away from Phenotype {ph}
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {{
+  var data    = {shap_data};
+  var baseVal = {round(base_val, 4)};
+  // Purple for positive SHAP, rose for negative — both harmonious with the purple UI
+  var POS_CLR = "#6c3fc5";
+  var NEG_CLR = "#be185d";
+  var chart   = document.getElementById('wf-chart');
+  var SCALE   = 85;
+
+  var cumulative = baseVal;
+  var snapshots  = [];
+  data.forEach(function(d) {{ snapshots.push(cumulative); cumulative += d.shap; }});
+  var finalVal = cumulative;
+
+  var allVals = snapshots.concat([finalVal, baseVal]);
+  var minVal  = Math.min.apply(null, allVals);
+  var maxVal  = Math.max.apply(null, allVals);
+  var range   = (maxVal - minVal) || 1;
+
+  function toX(v) {{ return ((v - minVal) / range * SCALE) + 2; }}
+
+  // Baseline
+  var blRow = document.createElement('div');
+  blRow.className = 'wf-baseline-row';
+  blRow.innerHTML =
+    '<div class="wf-baseline-label">E[f(x)]<br>baseline</div>' +
+    '<div style="position:relative;height:22px;">' +
+      '<div style="position:absolute;top:50%;left:' + toX(baseVal).toFixed(1) + '%;' +
+        'width:1.5px;height:18px;transform:translateY(-50%);background:#9580b8;opacity:0.5;"></div>' +
+    '</div>' +
+    '<div style="font-size:10.5px;color:#9580b8;font-weight:600;">' + baseVal.toFixed(3) + '</div>';
+  chart.appendChild(blRow);
+
+  // Feature rows
+  data.forEach(function(d, i) {{
+    var startX = toX(snapshots[i]);
+    var endX   = toX(snapshots[i] + d.shap);
+    var isPos  = d.shap >= 0;
+    var color  = isPos ? POS_CLR : NEG_CLR;
+    var left   = Math.min(startX, endX);
+    var width  = Math.max(Math.abs(endX - startX), 0.8);
+    var valStr = d.val !== null ? String(d.val) : "—";
+
+    var row = document.createElement('div');
+    row.className = 'wf-row';
+    var connLeft = toX(snapshots[i] + d.shap);
+
+    row.innerHTML =
+      '<div class="wf-feat">' + d.label +
+        '<span class="wf-feat-val">= ' + valStr + '</span>' +
+      '</div>' +
+      '<div class="wf-bar-track">' +
+        '<div class="wf-bar" style="left:' + left.toFixed(1) + '%;width:' + width.toFixed(1) + '%;background:' + color + ';opacity:0.82;"></div>' +
+        '<div class="wf-connector" style="left:' + connLeft.toFixed(1) + '%;background:' + color + ';"></div>' +
+      '</div>' +
+      '<div class="wf-shap-val ' + (isPos ? 'pos' : 'neg') + '">' +
+        (isPos ? '+' : '') + d.shap.toFixed(3) +
+      '</div>';
+    chart.appendChild(row);
+  }});
+
+  // f(x) row
+  var fxRow = document.createElement('div');
+  fxRow.className = 'wf-fx-row';
+  fxRow.innerHTML =
+    '<div class="wf-fx-label">f(x)<br>output</div>' +
+    '<div style="position:relative;height:22px;">' +
+      '<div style="position:absolute;top:50%;left:' + toX(finalVal).toFixed(1) + '%;' +
+        'width:2px;height:20px;transform:translateY(-50%);background:{ph_color};border-radius:1px;"></div>' +
+    '</div>' +
+    '<div class="wf-fx-val">' + finalVal.toFixed(3) + '</div>';
+  chart.appendChild(fxRow);
+}})();
+</script>
+"""
+            components.html(WATERFALL_HTML, height=520, scrolling=False)
+
             st.markdown(
-                f'<p style="font-size:0.7rem;color:{C_MUTED};margin-top:0.1rem;line-height:1.55;">'
-                f'Dot size and opacity encode relative importance. Scores are normalised Gini impurity-based '
-                f'feature importances from the P2 Random Forest pipeline — higher = more influential in '
-                f'phenotype classification. Not causal.</p>',
+                f'<p style="font-size:0.71rem;color:{C_MUTED};margin-top:0.3rem;line-height:1.65;">'
+                f'Each bar shows how much a feature shifts the model output from baseline E[f(x)] '
+                f'toward the final prediction f(x) for Phenotype {ph}. '
+                f'<span style="color:#6c3fc5;font-weight:600;">Purple = pushes toward {ph}.</span> '
+                f'<span style="color:#be185d;font-weight:600;">Rose = pushes away.</span>'
+                f'</p>',
                 unsafe_allow_html=True,
             )
+
         else:
             st.markdown(
                 f'<div style="border:1px solid #f5c08a;border-radius:10px;'
                 f'padding:1rem 1.2rem;font-size:0.82rem;color:#7a3a10;">'
-                f'⚠ Feature importance unavailable.<br>'
+                f'⚠ SHAP unavailable.<br>'
                 f'<pre style="font-size:0.72rem;white-space:pre-wrap;margin-top:0.5rem;">'
-                f'{base_or_err}</pre></div>',
+                f'{shap_err}</pre></div>',
                 unsafe_allow_html=True,
             )
 
+    # ── RADAR — FIX Q1: full purple palette ───────────────
     with col_radar:
-        # Radar uses TOMIM-25 features only — removed FSH/LH (not in TOMIM-25)
+        section_label("Biomarker Radar")
         radar_defs = [
-            ("AMH",       sd.get("amh",        0) or 0, 3.5),
-            ("BMI",       sd.get("bmi",         0) or 0, 24.9),
-            ("Waist:Hip", sd.get("whr",         0) or 0, 0.85),
-            ("RBS",       sd.get("rbs",         0) or 0, 140.0),
-            ("β-HCG I",   sd.get("beta_hcg_i", 0) or 0, 5.0),
-            ("Follicles L",sd.get("follicle_l", 0) or 0, 12.0),
+            ("AMH",         sd.get("amh",        0) or 0,  1.0,  3.5,   "ng/mL"),
+            ("BMI",         sd.get("bmi",        0) or 0,  18.5, 24.9,  "kg/m²"),
+            ("Waist:Hip",   sd.get("whr",        0) or 0,  0.0,  0.85,  "ratio"),
+            ("RBS",         sd.get("rbs",        0) or 0,  70.0, 140.0, "mg/dl"),
+            ("β-HCG I",     sd.get("beta_hcg_i",0) or 0,  0.0,  5.0,   "mIU/mL"),
+            ("Follicles L", sd.get("follicle_l", 0) or 0,  0.0,  12.0,  "count"),
+            ("Follicles R", sd.get("follicle_r", 0) or 0,  0.0,  12.0,  "count"),
         ]
+
         r_labels = [d[0] for d in radar_defs]
-        r_vals   = [min(d[1] / d[2] * 100, 140) for d in radar_defs]
+
+        def norm_radar(val, lo, hi):
+            if hi == lo: return 0
+            return min(max((val - lo) / (hi - lo) * 100, 0), 150)
+
+        def radar_status(val, lo, hi):
+            if hi > 0 and val > hi: return "High ↑"
+            if lo > 0 and val < lo: return "Low ↓"
+            return "Normal"
+
+        r_vals  = [norm_radar(d[1], d[2], d[3]) for d in radar_defs]
+        r_hover = [
+            f"{d[0]}: {fmt_kpi(d[1])} {d[4]} — {radar_status(d[1], d[2], d[3])}"
+            for d in radar_defs
+        ]
+
         r_labels_closed = r_labels + [r_labels[0]]
         r_vals_closed   = r_vals   + [r_vals[0]]
+        r_hover_closed  = r_hover  + [r_hover[0]]
+
+        any_high = any(norm_radar(d[1], d[2], d[3]) > 100 for d in radar_defs)
+
+        # Always purple — elevated areas use a deeper/more saturated purple
+        fill_color = "rgba(124,58,237,0.18)" if any_high else "rgba(108,63,197,0.13)"
+        line_color = "#7c3aed" if any_high else C_PURPLE
+        marker_clr = "#9b6fe8"
 
         fig_radar = go.Figure()
+        # Dotted reference ring
         fig_radar.add_trace(go.Scatterpolar(
-            r=[100]*len(r_labels_closed), theta=r_labels_closed, fill=None, mode="lines",
-            line=dict(color=C_BORDER, width=1.5, dash="dot"),
-            name="Reference (upper normal)", hoverinfo="skip", showlegend=True))
+            r=[100] * len(r_labels_closed), theta=r_labels_closed,
+            fill=None, mode="lines",
+            line=dict(color=C_PUR_LIGHT, width=1.5, dash="dot"),
+            name="Upper normal limit", hoverinfo="skip", showlegend=True,
+        ))
+        # Patient data
         fig_radar.add_trace(go.Scatterpolar(
-            r=r_vals_closed, theta=r_labels_closed, fill="toself",
-            fillcolor="rgba(108,63,197,0.12)", mode="lines+markers",
-            line=dict(color=C_PURPLE, width=2), marker=dict(size=5, color=C_PURPLE),
+            r=r_vals_closed, theta=r_labels_closed,
+            fill="toself", fillcolor=fill_color,
+            mode="lines+markers",
+            line=dict(color=line_color, width=2.5),
+            marker=dict(size=6, color=marker_clr,
+                        line=dict(color="#ffffff", width=1.5)),
             name="Patient values",
-            hovertemplate="<b>%{theta}</b><br>%{r:.1f}% of upper limit<extra></extra>",
-            showlegend=True))
+            text=r_hover_closed,
+            hovertemplate="%{text}<extra></extra>",
+            showlegend=True,
+        ))
         fig_radar.update_layout(
-            **BASE_LAYOUT, height=370, margin=dict(l=30, r=30, t=30, b=30),
+            **BASE_LAYOUT, height=440,
+            margin=dict(l=40, r=40, t=30, b=60),
             polar=dict(
-                bgcolor="rgba(0,0,0,0)",
-                radialaxis=dict(visible=True, range=[0, 140],
+                bgcolor="rgba(250,248,254,0.6)",
+                radialaxis=dict(
+                    visible=True, range=[0, 150],
+                    tickvals=[0, 50, 100, 150],
+                    ticktext=["0%", "50%", "100%", "150%"],
                     tickfont=dict(family=FONT_SORA, size=8, color=C_MUTED),
-                    gridcolor="rgba(180,165,220,0.2)", linecolor="rgba(180,165,220,0.2)",
-                    ticksuffix="%"),
-                angularaxis=dict(tickfont=dict(family=FONT_SORA, size=10, color=C_TEXT),
-                    gridcolor="rgba(180,165,220,0.2)", linecolor="rgba(180,165,220,0.2)")),
-            legend=dict(font=dict(family=FONT_SORA, size=9, color=C_MUTED),
-                orientation="h", yanchor="bottom", y=-0.08, xanchor="center", x=0.5))
+                    gridcolor="rgba(180,165,220,0.30)",
+                    linecolor="rgba(180,165,220,0.30)",
+                ),
+                angularaxis=dict(
+                    tickfont=dict(family=FONT_SORA, size=10.5, color=C_TEXT),
+                    gridcolor="rgba(180,165,220,0.30)",
+                    linecolor="rgba(180,165,220,0.25)",
+                ),
+            ),
+            legend=dict(
+                font=dict(family=FONT_SORA, size=9, color=C_MUTED),
+                orientation="h", yanchor="bottom", y=-0.14,
+                xanchor="center", x=0.5,
+            ),
+        )
         st.plotly_chart(fig_radar, use_container_width=True, config={"displayModeBar": False})
-        st.markdown(
-            f'<p style="font-size:0.72rem;color:{C_MUTED};margin-top:-0.3rem;text-align:center;">'
-            f'Values shown as % of upper reference limit. Dotted ring = normal ceiling.</p>',
-            unsafe_allow_html=True)
 
-    # ── Follicle | Phenotype drivers ──────────────────────
-    st.markdown("<div style='height:0.3rem'></div>", unsafe_allow_html=True)
+        elevated_note = (
+            f"<span style='color:{C_PUR_DARK};font-weight:600;'>⚠ One or more values are elevated.</span>"
+            if any_high else "All values within normal range."
+        )
+        st.markdown(
+            f'<p style="font-size:0.72rem;color:{C_MUTED};margin-top:-0.5rem;text-align:center;">'
+            f'100% = upper normal limit. Values beyond the dotted ring are elevated. {elevated_note}</p>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<div style='height:2rem'></div>", unsafe_allow_html=True)
+
+    # ── ROW 3: Follicle bar | Driver bar ──────────────────
+    # ── FIX Q2: Driver features now come from SHAP p2_model ──
+    section_label("Ultrasound & Clinical Thresholds")
     col_foll, col_sym = st.columns(2, gap="large")
 
     with col_foll:
@@ -1470,15 +1759,18 @@ elif app_step == "dashboard":
         fig_foll = go.Figure()
         fig_foll.add_trace(go.Bar(
             x=["Left Ovary","Right Ovary"], y=[fl, fr],
-            marker=dict(color=[C_PURPLE, "rgba(108,63,197,0.5)"],
-                line=dict(color="rgba(255,255,255,0.3)", width=0.5), cornerradius=4),
+            marker=dict(
+                color=[C_PUR_MID, C_PUR_BRIGHT],
+                line=dict(color="rgba(255,255,255,0.3)", width=0.5),
+                cornerradius=4,
+            ),
             text=[f"<b>{fl}</b>", f"<b>{fr}</b>"], textposition="outside",
             textfont=dict(family=FONT_SORA, size=11, color=C_TEXT),
             hovertemplate="<b>%{x}</b><br>Follicles: %{y}<extra></extra>", width=0.35))
         fig_foll.add_hline(y=12, line=dict(color=C_HIGH, width=1.5, dash="dash"),
             annotation_text="Polycystic threshold (≥12)", annotation_position="top right",
             annotation_font=dict(size=8.5, color=C_HIGH))
-        fig_foll.update_layout(**BASE_LAYOUT, height=260,
+        fig_foll.update_layout(**BASE_LAYOUT, height=280,
             margin=dict(l=0, r=0, t=10, b=10),
             xaxis=dict(tickfont=dict(family=FONT_SORA, size=11, color=C_TEXT), showgrid=False),
             yaxis=dict(**axis_style(),
@@ -1488,52 +1780,92 @@ elif app_step == "dashboard":
         st.plotly_chart(fig_foll, use_container_width=True, config={"displayModeBar": False})
 
     with col_sym:
-        section_label("Phenotype Driver Features")
-        # Driver chart — TOMIM-25 features with clinical thresholds
-        driver_defs = [
-            ("AMH",         sd.get("amh",        0) or 0, 3.5,  "ng/mL"),
-            ("β-HCG I",     sd.get("beta_hcg_i", 0) or 0, 5.0,  "mIU/mL"),
-            ("Follicles L", sd.get("follicle_l",  0) or 0, 12.0, "count"),
-            ("Follicles R", sd.get("follicle_r",  0) or 0, 12.0, "count"),
-            ("Waist:Hip",   sd.get("whr",         0) or 0, 0.85, "ratio"),
-            ("RBS",         sd.get("rbs",         0) or 0, 140.0,"mg/dl"),
-        ]
-        drv_labels = [d[0] for d in driver_defs]
-        drv_raw    = [d[1] for d in driver_defs]
-        drv_ref    = [d[2] for d in driver_defs]
-        drv_units  = [d[3] for d in driver_defs]
-        drv_pct    = [min(v/ref*100, 160) if ref else 0 for v, ref in zip(drv_raw, drv_ref)]
-        drv_colors = [C_PURPLE if pct >= 100 else f"rgba(108,63,197,{max(0.25, pct/100*0.7):.2f})"
-                      for pct in drv_pct]
+        # ── SHAP-driven phenotype driver features ─────────
+        section_label("Phenotype Driver Features (SHAP-ranked)")
+
+        with st.spinner(""):
+            driver_features, is_shap = get_shap_driver_features(inp, ph, top_n=6)
+
+        if is_shap:
+            source_note = "Ranked by absolute SHAP contribution to Phenotype " + ph + " from P2 model."
+        else:
+            source_note = "SHAP unavailable — showing clinical threshold comparison."
+
+        drv_labels = [d[0] for d in driver_features]
+        drv_raw    = [d[1] for d in driver_features]
+        drv_shap   = [d[2] for d in driver_features]  # None if fallback
+        drv_ref    = [d[3] for d in driver_features]
+
+        # Build display: if SHAP available show SHAP magnitude bars, else % of threshold
+        if is_shap and all(s is not None for s in drv_shap):
+            max_abs = max(abs(s) for s in drv_shap) or 1
+            drv_pct = [abs(s) / max_abs * 100 for s in drv_shap]
+            drv_colors = [
+                C_PUR_MID if s >= 0 else C_PUR_BRIGHT
+                for s in drv_shap
+            ]
+            x_title = "SHAP importance (normalised)"
+            hover_sfx = [f"SHAP: {'+' if s>=0 else ''}{s:.4f}" for s in drv_shap]
+        else:
+            drv_pct    = [min(v / r * 100, 160) if r else 0 for v, r in zip(drv_raw, drv_ref)]
+            drv_colors = [C_PUR_MID if p >= 100 else f"rgba(108,63,197,{max(0.25, p/100*0.7):.2f})"
+                          for p in drv_pct]
+            x_title    = "% of clinical threshold"
+            hover_sfx  = [f"{pct:.1f}% of threshold" for pct in drv_pct]
 
         fig_drv = go.Figure()
-        fig_drv.add_vline(x=100, line=dict(color=C_MUTED, width=1.2, dash="dot"),
-            annotation_text="threshold", annotation_position="top right",
-            annotation_font=dict(size=8, color=C_MUTED))
+
+        if is_shap:
+            # No threshold line for SHAP view
+            pass
+        else:
+            fig_drv.add_vline(x=100, line=dict(color=C_MUTED, width=1.2, dash="dot"),
+                annotation_text="threshold", annotation_position="top right",
+                annotation_font=dict(size=8, color=C_MUTED))
+
         fig_drv.add_trace(go.Bar(
             y=drv_labels[::-1], x=drv_pct[::-1], orientation="h",
-            marker=dict(color=drv_colors[::-1],
-                line=dict(color="rgba(255,255,255,0.2)", width=0.5), cornerradius=3),
-            text=[f"  {v:.3g} {u}" for v, u in zip(drv_raw[::-1], drv_units[::-1])],
+            marker=dict(
+                color=drv_colors[::-1],
+                line=dict(color="rgba(255,255,255,0.2)", width=0.5),
+                cornerradius=3,
+            ),
+            text=[f"  {fmt_kpi(v)}" for v in drv_raw[::-1]],
             textposition="outside",
             textfont=dict(family=FONT_SORA, size=9.5, color=C_TEXT),
-            hovertemplate="<b>%{y}</b><br>%{x:.1f}% of threshold<extra></extra>"))
-        fig_drv.update_layout(**BASE_LAYOUT, height=260,
-            margin=dict(l=0, r=90, t=20, b=10),
-            xaxis=dict(**axis_style(), ticksuffix="%", range=[0, 195],
-                title=dict(text="% of clinical threshold",
-                    font=dict(family=FONT_SORA, size=9, color=C_MUTED))),
+            hovertemplate="<b>%{y}</b><br>%{text}<extra></extra>",
+        ))
+        fig_drv.update_layout(**BASE_LAYOUT, height=280,
+            margin=dict(l=0, r=70, t=20, b=10),
+            xaxis=dict(**axis_style(),
+                ticksuffix="" if is_shap else "%",
+                range=[0, max(drv_pct) * 1.35 if drv_pct else 120],
+                title=dict(text=x_title, font=dict(family=FONT_SORA, size=9, color=C_MUTED))),
             yaxis=dict(tickfont=dict(family=FONT_SORA, size=11, color=C_TEXT),
                 showgrid=False, autorange=True),
             showlegend=False)
         st.plotly_chart(fig_drv, use_container_width=True, config={"displayModeBar": False})
+
+        if is_shap:
+            legend_drv = (
+                f'<div style="display:flex;gap:1rem;margin-top:-0.2rem;">'
+                f'<span style="font-size:0.7rem;color:{C_MUTED};display:flex;align-items:center;gap:0.3rem;">'
+                f'<span style="width:10px;height:10px;border-radius:3px;background:{C_PUR_MID};display:inline-block;"></span>'
+                f'Pushes toward {ph}</span>'
+                f'<span style="font-size:0.7rem;color:{C_MUTED};display:flex;align-items:center;gap:0.3rem;">'
+                f'<span style="width:10px;height:10px;border-radius:3px;background:{C_PUR_BRIGHT};display:inline-block;"></span>'
+                f'Pushes away from {ph}</span>'
+                f'</div>'
+            )
+            st.markdown(legend_drv, unsafe_allow_html=True)
+
         st.markdown(
-            f'<p style="font-size:0.72rem;color:{C_MUTED};margin-top:-0.3rem;">'
-            f'Bars show patient value as % of upper clinical threshold. Filled bars exceed threshold.</p>',
+            f'<p style="font-size:0.72rem;color:{C_MUTED};margin-top:0.2rem;">{source_note}</p>',
             unsafe_allow_html=True)
 
+    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+
     # ── Full data record ──────────────────────────────────
-    st.markdown("<div style='height:0.3rem'></div>", unsafe_allow_html=True)
     with st.expander("📋 Full Patient Data Record"):
         NICE = {
             "age":"Age (yrs)", "weight":"Weight (kg)", "height":"Height (cm)",
@@ -1545,7 +1877,7 @@ elif app_step == "dashboard":
             "beta_hcg_i":"β-HCG I", "amh":"AMH", "rbs":"RBS",
             "follicle_l":"Follicles L", "follicle_r":"Follicles R",
             "weight_gain_label":"Weight Gain", "hair_growth_label":"Hair Growth",
-            "pimples_label":"Pimples",
+            "skin_dark_label":"Skin Dark.", "pimples_label":"Pimples",
             "fast_food_label":"Fast Food", "exercise_label":"Exercises",
         }
         SECS = {
@@ -1554,7 +1886,7 @@ elif app_step == "dashboard":
             "Menstrual":      ["cycle_ri_label","marriage_yr","pregnant_label","abortions"],
             "Laboratory":     ["beta_hcg_i","amh","rbs"],
             "Ultrasound":     ["follicle_l","follicle_r"],
-            "Symptoms":       ["weight_gain_label","hair_growth_label","pimples_label","fast_food_label","exercise_label"],
+            "Symptoms":       ["weight_gain_label","hair_growth_label","skin_dark_label","pimples_label","fast_food_label","exercise_label"],
         }
         RANGES = {
             "bmi":(18.5,24.9),"whr":(0,0.85),
@@ -1573,8 +1905,9 @@ elif app_step == "dashboard":
             for k, v in items.items():
                 lo, hi = RANGES.get(k, (None, None))
                 try:
-                    fv = float(v); color = val_status(fv, lo, hi) if lo is not None else C_TEXT
-                    disp = f"{fv:.3g}"
+                    fv    = float(v)
+                    color = val_status(fv, lo, hi) if lo is not None else C_TEXT
+                    disp  = fmt_kpi(fv)
                 except (TypeError, ValueError):
                     color = C_TEXT; disp = str(v)
                 pills += (
