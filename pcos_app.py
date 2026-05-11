@@ -36,7 +36,7 @@ def img_b64(path):
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode()
 
-OVARY_IMG     = img_b64("ovarian_morphology.jpg")
+OVARY_IMG      = img_b64("ovarian_morphology.jpg")
 PHENOTYPES_IMG = img_b64("phenotypes.jpg")
 
 # ─────────────────────────────────────────────────────────
@@ -69,8 +69,8 @@ def evaluate_rotterdam(inp):
         or inp.get("pimples (1/0)", 0)
         or inp.get("skin darkening (1/0)", 0)
     )
-    fl  = inp.get("follicle no. (l)", 0) or 0
-    fr  = inp.get("follicle no. (r)", 0) or 0
+    fl   = inp.get("follicle no. (l)", 0) or 0
+    fr   = inp.get("follicle no. (r)", 0) or 0
     pcom = (fl >= 12) or (fr >= 12)
     return oa, ha, pcom
 
@@ -127,13 +127,13 @@ SECTION_LABELS = {
 }
 
 DEFAULTS = {
-    "active_section":  0,
-    "section_data":    {},
-    "app_step":        "overview",
-    "pcos_result":     None,
-    "phenotype_result":None,
-    "rotterdam_flags": None,
-    "inputs":          {},
+    "active_section":   0,
+    "section_data":     {},
+    "app_step":         "overview",
+    "pcos_result":      None,
+    "phenotype_result": None,
+    "rotterdam_flags":  None,
+    "inputs":           {},
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
@@ -247,56 +247,50 @@ def compute_shap_values(inp):
 
 
 def get_shap_driver_features(inp, ph, top_n=6):
-    """
-    Extract top-N features driving the predicted phenotype from SHAP values.
-    Returns list of (label, patient_value, shap_value, clinical_ref) tuples.
-    Falls back to hardcoded list if SHAP fails.
-    """
     LABEL_MAP = {
         "i   beta-hcg(miu/ml)": "β-HCG I",
-        "amh (ng/ml)":           "AMH",
-        "rbs (mg/dl)":           "RBS",
-        "follicle no. (l)":      "Follicles L",
-        "follicle no. (r)":      "Follicles R",
-        "waist:hip ratio":       "Waist:Hip",
-        "bmi":                   "BMI",
-        "cycle (2/4)":           "Cycle",
-        "weight gain (1/0)":     "Weight Gain",
-        "hair growth (1/0)":     "Hair Growth",
-        "pimples (1/0)":         "Pimples",
-        "skin darkening (1/0)":  "Skin Darkening",
-        "fast food (1/0)":       "Fast Food",
-        "reg.exercise (1/0)":    "Exercise",
-        "bp _systolic (mmhg)":   "BP Systolic",
-        "bp _diastolic (mmhg)":  "BP Diastolic",
-        "pulse rate (bpm)":      "Pulse Rate",
-        "waist (inch)":          "Waist",
-        "hip (inch)":            "Hip",
-        "blood group":           "Blood Group",
-        "marraige status (yrs)": "Marriage (yrs)",
-        "pregnant (1/0)":        "Pregnant",
-        "no. of abortions":      "Abortions",
-        "age":                   "Age",
-        "weight":                "Weight",
-        "height":                "Height",
+        "amh (ng/ml)":          "AMH",
+        "rbs (mg/dl)":          "RBS",
+        "follicle no. (l)":     "Follicles L",
+        "follicle no. (r)":     "Follicles R",
+        "waist:hip ratio":      "Waist:Hip",
+        "bmi":                  "BMI",
+        "cycle (2/4)":          "Cycle",
+        "weight gain (1/0)":    "Weight Gain",
+        "hair growth (1/0)":    "Hair Growth",
+        "pimples (1/0)":        "Pimples",
+        "skin darkening (1/0)": "Skin Darkening",
+        "fast food (1/0)":      "Fast Food",
+        "reg.exercise (1/0)":   "Exercise",
+        "bp _systolic (mmhg)":  "BP Systolic",
+        "bp _diastolic (mmhg)": "BP Diastolic",
+        "pulse rate (bpm)":     "Pulse Rate",
+        "waist (inch)":         "Waist",
+        "hip (inch)":           "Hip",
+        "blood group":          "Blood Group",
+        "marraige status (yrs)":"Marriage (yrs)",
+        "pregnant (1/0)":       "Pregnant",
+        "no. of abortions":     "Abortions",
+        "age":                  "Age",
+        "weight":               "Weight",
+        "height":               "Height",
     }
-    # Clinical reference thresholds for % display
     REF_MAP = {
-        "amh (ng/ml)":           3.5,
-        "rbs (mg/dl)":           140.0,
-        "follicle no. (l)":      12.0,
-        "follicle no. (r)":      12.0,
-        "waist:hip ratio":       0.85,
-        "bmi":                   24.9,
-        "i   beta-hcg(miu/ml)":  5.0,
-        "bp _systolic (mmhg)":   120.0,
-        "bp _diastolic (mmhg)":  80.0,
-        "pulse rate (bpm)":      100.0,
-        "waist (inch)":          35.0,
-        "hip (inch)":            45.0,
-        "age":                   40.0,
-        "weight":                80.0,
-        "height":                170.0,
+        "amh (ng/ml)":          3.5,
+        "rbs (mg/dl)":          140.0,
+        "follicle no. (l)":     12.0,
+        "follicle no. (r)":     12.0,
+        "waist:hip ratio":      0.85,
+        "bmi":                  24.9,
+        "i   beta-hcg(miu/ml)": 5.0,
+        "bp _systolic (mmhg)":  120.0,
+        "bp _diastolic (mmhg)": 80.0,
+        "pulse rate (bpm)":     100.0,
+        "waist (inch)":         35.0,
+        "hip (inch)":           45.0,
+        "age":                  40.0,
+        "weight":               80.0,
+        "height":               170.0,
     }
 
     shap_values, selected_names, err = compute_shap_values(inp)
@@ -315,20 +309,19 @@ def get_shap_driver_features(inp, ph, top_n=6):
 
         result = []
         for shap_val, feat_key in paired:
-            label   = LABEL_MAP.get(feat_key, feat_key)
-            val     = inp.get(feat_key, 0) or 0
-            ref     = REF_MAP.get(feat_key, None)
+            label = LABEL_MAP.get(feat_key, feat_key)
+            val   = inp.get(feat_key, 0) or 0
+            ref   = REF_MAP.get(feat_key, None)
             result.append((label, val, shap_val, ref))
         return result, True
     else:
-        # Fallback: hardcoded clinical drivers
         fallback = [
-            ("AMH",         inp.get("amh (ng/ml)", 0) or 0,         None, 3.5),
+            ("AMH",         inp.get("amh (ng/ml)", 0) or 0,          None, 3.5),
             ("β-HCG I",     inp.get("i   beta-hcg(miu/ml)", 0) or 0, None, 5.0),
-            ("Follicles L", inp.get("follicle no. (l)", 0) or 0,     None, 12.0),
-            ("Follicles R", inp.get("follicle no. (r)", 0) or 0,     None, 12.0),
-            ("Waist:Hip",   inp.get("waist:hip ratio", 0) or 0,      None, 0.85),
-            ("RBS",         inp.get("rbs (mg/dl)", 0) or 0,          None, 140.0),
+            ("Follicles L", inp.get("follicle no. (l)", 0) or 0,      None, 12.0),
+            ("Follicles R", inp.get("follicle no. (r)", 0) or 0,      None, 12.0),
+            ("Waist:Hip",   inp.get("waist:hip ratio", 0) or 0,       None, 0.85),
+            ("RBS",         inp.get("rbs (mg/dl)", 0) or 0,           None, 140.0),
         ]
         return [(l, v, None, r) for l, v, _, r in fallback], False
 
@@ -337,11 +330,11 @@ def reset():
     for k, v in DEFAULTS.items():
         st.session_state[k] = v if not isinstance(v, dict) else {}
 
+
 # ─────────────────────────────────────────────────────────
-# KPI NUMBER FORMATTER — FIX Q4
+# KPI NUMBER FORMATTER
 # ─────────────────────────────────────────────────────────
 def fmt_kpi(val):
-    """Smart formatter: never use scientific notation, show enough precision."""
     try:
         v = float(val)
         if v == int(v) and abs(v) < 10000:
@@ -354,6 +347,7 @@ def fmt_kpi(val):
             return f"{v:.3f}".rstrip('0').rstrip('.')
     except:
         return str(val)
+
 
 # ─────────────────────────────────────────────────────────
 # SIDEBAR HELPERS
@@ -391,6 +385,7 @@ def _pipeline_stages(rule_state, p2_state, dash_state="locked"):
     html += stage("02", "Phenotype Classification", "Types A / B / C / D",           p2_state)
     html += stage("03", "Clinical Dashboard",       "Charts, importance & summary",  dash_state)
     st.markdown(html, unsafe_allow_html=True)
+
 
 # ─────────────────────────────────────────────────────────
 # SIDEBAR
@@ -448,6 +443,7 @@ with st.sidebar:
         if st.button("Start Over", use_container_width=True):
             reset(); st.rerun()
 
+
 # ─────────────────────────────────────────────────────────
 # MAIN — HEADER
 # ─────────────────────────────────────────────────────────
@@ -472,6 +468,7 @@ elif app_step == "result":
         st.markdown('<div class="main-header"><h1>PCOS Detection Result</h1><p>Based on Rotterdam criteria applied to all entered clinical data.</p></div>', unsafe_allow_html=True)
 elif app_step == "dashboard":
     st.markdown('<div class="main-header"><h1>Clinical Dashboard</h1><p>Full diagnostic summary, biomarker analysis, and model explainability.</p></div>', unsafe_allow_html=True)
+
 
 # ─────────────────────────────────────────────────────────
 # OVERVIEW PAGE
@@ -695,61 +692,166 @@ if app_step == "overview":
             st.session_state.app_step = "form"
             st.rerun()
 
+
 # ─────────────────────────────────────────────────────────
-# FORM
+# FORM — Single-column vertical layout
 # ─────────────────────────────────────────────────────────
 elif app_step == "form":
     sd = st.session_state.section_data
 
-    def nav_buttons(form_key, back_idx, next_label):
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            back = st.form_submit_button("Back") if back_idx is not None else False
-        with col2:
-            nxt = st.form_submit_button(next_label, use_container_width=True)
-        return back, nxt
+    def field_label(label, hint=None, required=False):
+        req_badge = '<span class="f-required">Required</span>' if required else ""
+        hint_txt  = f'<span class="f-hint">{hint}</span>' if hint else ""
+        st.markdown(
+            f'<div class="f-label-row">'
+            f'<span class="f-label">{label}</span>{req_badge}{hint_txt}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
+    def field_divider():
+        st.markdown('<div class="f-divider"></div>', unsafe_allow_html=True)
+
+    st.markdown("""
+    <style>
+    .f-card {
+        background: #ffffff;
+        border: 1px solid #e8e0f5;
+        border-radius: 14px;
+        padding: 0;
+        overflow: hidden;
+        max-width: 640px;
+        margin: 0 auto 1.5rem;
+        box-shadow: 0 2px 16px rgba(108,63,197,0.07);
+    }
+    .f-card-header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 1.1rem 1.4rem 1rem;
+        border-bottom: 1.5px solid #f0eaf9;
+        background: #faf8fe;
+    }
+    .f-card-num {
+        width: 30px; height: 30px;
+        background: #7c52cc;
+        border-radius: 7px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 0.65rem; font-weight: 700;
+        color: #fff; letter-spacing: 0.04em;
+        flex-shrink: 0;
+    }
+    .f-card-title { font-size: 0.9rem; font-weight: 700; color: #1e1040; line-height: 1.2; }
+    .f-card-desc  { font-size: 0.72rem; color: #9580b8; margin-top: 1px; }
+    .f-card-body  { padding: 0 1.4rem 0.4rem; }
+    .f-label-row {
+        display: flex;
+        align-items: baseline;
+        gap: 0.5rem;
+        margin: 1.1rem 0 0.3rem;
+    }
+    .f-label { font-size: 0.82rem; font-weight: 600; color: #1e1040; }
+    .f-required {
+        font-size: 0.58rem; font-weight: 700;
+        background: rgba(124,82,204,0.12); color: #7c52cc;
+        border-radius: 4px; padding: 1px 6px;
+        letter-spacing: 0.06em; text-transform: uppercase;
+    }
+    .f-hint { font-size: 0.68rem; color: #b0a8c8; font-style: italic; }
+    .f-divider { height: 1px; background: #f0eaf9; margin: 0.5rem 0 0; }
+    .f-auto-pill {
+        display: inline-flex; align-items: center; gap: 0.5rem;
+        background: rgba(124,82,204,0.07); border: 1px solid #ddd0f5;
+        border-radius: 8px; padding: 0.4rem 0.8rem;
+        font-size: 0.78rem; color: #4a2c9e; font-weight: 600;
+        margin-top: 0.3rem; margin-bottom: 0.4rem;
+    }
+    .f-auto-pill .f-auto-label {
+        font-size: 0.6rem; text-transform: uppercase;
+        letter-spacing: 0.1em; color: #9580b8; font-weight: 700;
+    }
+    .f-auto-row { display: flex; gap: 0.6rem; flex-wrap: wrap; margin: 0.4rem 0; }
+    div[data-testid="stRadio"] > label { font-size: 0.82rem !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # ── Section 0 — Anthropometric ────────────────────────
     if active_sec == 0:
-        with st.form("sec_0"):
-            st.markdown("""<div class="section-card"><div class="section-header">
-                <div class="section-icon">01</div>
-                <div><div class="section-title">Anthropometric Measurements</div>
-                <div class="section-desc">Height, weight, BMI, body ratios</div></div>
-            </div>""", unsafe_allow_html=True)
+        st.markdown("""
+        <div class="f-card">
+          <div class="f-card-header">
+            <div class="f-card-num">01</div>
+            <div>
+              <div class="f-card-title">Anthropometric Measurements</div>
+              <div class="f-card-desc">Height, weight, BMI, body ratios</div>
+            </div>
+          </div>
+          <div class="f-card-body">
+        """, unsafe_allow_html=True)
 
-            c1, c2, c3 = st.columns(3)
-            age    = c1.number_input("Age (years)",  min_value=15,    max_value=55,    value=sd.get("age",    None), placeholder="Type here")
-            weight = c2.number_input("Weight (kg)",  min_value=30.0,  max_value=150.0, value=sd.get("weight", None), step=0.5, placeholder="Type here")
-            height = c3.number_input("Height (cm)",  min_value=130.0, max_value=200.0, value=sd.get("height", None), step=0.5, placeholder="Type here")
+        with st.form("sec_0"):
+            field_label("Age", "years", required=True)
+            age = st.number_input("Age (years)", min_value=15, max_value=55,
+                                  value=sd.get("age", None), placeholder="e.g. 28",
+                                  label_visibility="collapsed")
+            field_divider()
+
+            field_label("Weight", "kg", required=True)
+            weight = st.number_input("Weight (kg)", min_value=30.0, max_value=150.0,
+                                     value=sd.get("weight", None), step=0.5,
+                                     placeholder="e.g. 58.5", label_visibility="collapsed")
+            field_divider()
+
+            field_label("Height", "cm", required=True)
+            height = st.number_input("Height (cm)", min_value=130.0, max_value=200.0,
+                                     value=sd.get("height", None), step=0.5,
+                                     placeholder="e.g. 162.0", label_visibility="collapsed")
+            field_divider()
+
+            field_label("Hip", "inches", required=True)
+            hip = st.number_input("Hip (inch)", min_value=20.0, max_value=60.0,
+                                  value=sd.get("hip", None), step=0.5,
+                                  placeholder="e.g. 38.0", label_visibility="collapsed")
+            field_divider()
+
+            field_label("Waist", "inches", required=True)
+            waist = st.number_input("Waist (inch)", min_value=20.0, max_value=60.0,
+                                    value=sd.get("waist", None), step=0.5,
+                                    placeholder="e.g. 30.0", label_visibility="collapsed")
+            field_divider()
+
+            field_label("Blood Type", required=True)
+            bg_opts     = ["A+","A-","B+","B-","O+","O-","AB+","AB-"]
+            blood_group = st.selectbox("Blood Type", bg_opts,
+                                       index=bg_opts.index(sd.get("blood_group","A+")),
+                                       label_visibility="collapsed")
+            field_divider()
 
             bmi = sd.get("_calc_bmi")
             whr = sd.get("_calc_whr")
-
-            c1, c2, c3, c4, c5 = st.columns(5)
-            hip   = c1.number_input("Hip (inch)",   min_value=20.0, max_value=60.0, value=sd.get("hip",   None), step=0.5, placeholder="Type here")
-            waist = c2.number_input("Waist (inch)", min_value=20.0, max_value=60.0, value=sd.get("waist", None), step=0.5, placeholder="Type here")
-
-            bg_opts     = ["A+","A-","B+","B-","O+","O-","AB+","AB-"]
-            blood_group = c3.selectbox("Blood Type", bg_opts, index=bg_opts.index(sd.get("blood_group","A+")))
-
             if weight and height and height > 0:
                 bmi = round(weight / ((height / 100) ** 2), 2)
             if waist and hip and hip > 0:
                 whr = round(waist / hip, 3)
 
             bmi_display = f"{bmi:.1f} kg/m²" if bmi else "—"
-            whr_display = f"{whr:.3f}" if whr else "—"
+            whr_display = f"{whr:.3f}"        if whr else "—"
 
-            c4.markdown(f'<div class="auto-pill">BMI<span>{bmi_display}</span></div>', unsafe_allow_html=True)
-            c5.markdown(f'<div class="auto-pill">Waist:Hip Ratio<span>{whr_display}</span></div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="f-auto-row">'
+                f'<div class="f-auto-pill"><span class="f-auto-label">BMI</span>{bmi_display}</div>'
+                f'<div class="f-auto-pill"><span class="f-auto-label">Waist:Hip</span>{whr_display}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
-            st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown('</div></div>', unsafe_allow_html=True)
 
-            calc_col, _, next_col = st.columns([1, 0.1, 3.9])
-            with calc_col:
+            col_calc, col_next = st.columns([1, 3])
+            with col_calc:
                 calc = st.form_submit_button("Calculate", use_container_width=True)
-            with next_col:
-                nxt = st.form_submit_button("Next — Vitals", use_container_width=True)
+            with col_next:
+                nxt = st.form_submit_button("Next — Vitals →", use_container_width=True)
 
         if calc:
             _bmi = round(weight / ((height/100)**2), 2) if (weight and height) else None
@@ -764,67 +866,122 @@ elif app_step == "form":
         if nxt:
             missing = [f for f, v in [("Age",age),("Weight",weight),("Height",height),("Hip",hip),("Waist",waist)] if v is None]
             if missing:
-                st.error("Some fields are incomplete. Please review all inputs before continuing.")
+                st.error("Some fields are incomplete. Please fill all required fields before continuing.")
             else:
                 _bmi = round(weight / ((height/100)**2), 2)
                 _whr = round(waist/hip, 3)
                 bg_map = {"A+":11,"A-":12,"B+":13,"B-":14,"O+":15,"O-":16,"AB+":17,"AB-":18}
                 sd.update({
-                    "age":age,"weight":weight,"height":height,"bmi":_bmi,
-                    "hip":hip,"waist":waist,"whr":_whr,"blood_group":blood_group,
+                    "age":age, "weight":weight, "height":height, "bmi":_bmi,
+                    "hip":hip, "waist":waist, "whr":_whr, "blood_group":blood_group,
                     "bg_code":bg_map[blood_group],
-                    "_calc_bmi":_bmi,"_calc_whr":_whr,
+                    "_calc_bmi":_bmi, "_calc_whr":_whr,
                 })
                 st.session_state.active_section = 1; st.rerun()
 
+    # ── Section 1 — Vitals ────────────────────────────────
     elif active_sec == 1:
+        st.markdown("""
+        <div class="f-card">
+          <div class="f-card-header">
+            <div class="f-card-num">02</div>
+            <div>
+              <div class="f-card-title">Vitals</div>
+              <div class="f-card-desc">Pulse and blood pressure</div>
+            </div>
+          </div>
+          <div class="f-card-body">
+        """, unsafe_allow_html=True)
+
         with st.form("sec_1"):
-            st.markdown("""<div class="section-card"><div class="section-header">
-                <div class="section-icon">02</div>
-                <div><div class="section-title">Vitals</div>
-                <div class="section-desc">Pulse and blood pressure</div></div>
-            </div>""", unsafe_allow_html=True)
+            field_label("Pulse Rate", "bpm", required=True)
+            pulse = st.number_input("Pulse Rate (bpm)", min_value=40, max_value=130,
+                                    value=sd.get("pulse", None), placeholder="e.g. 78",
+                                    label_visibility="collapsed")
+            field_divider()
 
-            c1, c2, c3 = st.columns(3)
-            pulse  = c1.number_input("Pulse Rate (bpm)",    min_value=40, max_value=130, value=sd.get("pulse",  None), placeholder="Type here")
-            bp_sys = c2.number_input("BP Systolic (mmHg)",  min_value=70, max_value=200, value=sd.get("bp_sys", None), placeholder="Type here")
-            bp_dia = c3.number_input("BP Diastolic (mmHg)", min_value=40, max_value=130, value=sd.get("bp_dia", None), placeholder="Type here")
+            field_label("BP Systolic", "mmHg", required=True)
+            bp_sys = st.number_input("BP Systolic (mmHg)", min_value=70, max_value=200,
+                                     value=sd.get("bp_sys", None), placeholder="e.g. 110",
+                                     label_visibility="collapsed")
+            field_divider()
 
-            st.markdown("</div>", unsafe_allow_html=True)
-            back, nxt = nav_buttons("sec_1", 0, "Next — Menstrual History")
+            field_label("BP Diastolic", "mmHg", required=True)
+            bp_dia = st.number_input("BP Diastolic (mmHg)", min_value=40, max_value=130,
+                                     value=sd.get("bp_dia", None), placeholder="e.g. 70",
+                                     label_visibility="collapsed")
+            field_divider()
+
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+            col_back, col_next = st.columns([1, 3])
+            with col_back:
+                back = st.form_submit_button("← Back", use_container_width=True)
+            with col_next:
+                nxt = st.form_submit_button("Next — Menstrual History →", use_container_width=True)
 
         if nxt:
             missing = [f for f, v in [("Pulse Rate",pulse),("BP Systolic",bp_sys),("BP Diastolic",bp_dia)] if v is None]
             if missing:
-                st.error("Some fields are incomplete. Please review all inputs before continuing.")
+                st.error("Some fields are incomplete. Please fill all required fields before continuing.")
             else:
-                sd.update({"pulse":pulse,"bp_sys":bp_sys,"bp_dia":bp_dia})
+                sd.update({"pulse":pulse, "bp_sys":bp_sys, "bp_dia":bp_dia})
                 st.session_state.active_section = 2; st.rerun()
         if back: st.session_state.active_section = 0; st.rerun()
 
+    # ── Section 2 — Menstrual & Reproductive ──────────────
     elif active_sec == 2:
+        st.markdown("""
+        <div class="f-card">
+          <div class="f-card-header">
+            <div class="f-card-num">03</div>
+            <div>
+              <div class="f-card-title">Menstrual &amp; Reproductive History</div>
+              <div class="f-card-desc">Cycle regularity, pregnancy history</div>
+            </div>
+          </div>
+          <div class="f-card-body">
+        """, unsafe_allow_html=True)
+
         with st.form("sec_2"):
-            st.markdown("""<div class="section-card"><div class="section-header">
-                <div class="section-icon">03</div>
-                <div><div class="section-title">Menstrual & Reproductive History</div>
-                <div class="section-desc">Cycle regularity, pregnancy history</div></div>
-            </div>""", unsafe_allow_html=True)
+            field_label("Menstrual Cycle", required=True)
+            cy_opts  = ["Regular", "Irregular"]
+            cycle_ri = st.selectbox("Menstrual Cycle", cy_opts,
+                                    index=cy_opts.index(sd.get("cycle_ri_label","Regular")),
+                                    label_visibility="collapsed")
+            field_divider()
 
-            c1, c2, c3, c4 = st.columns(4)
-            cy_opts   = ["Regular","Irregular"]
-            cycle_ri  = c1.selectbox("Menstrual Cycle", cy_opts, index=cy_opts.index(sd.get("cycle_ri_label","Regular")))
-            marriage  = c2.number_input("Marriage Duration (years)", min_value=0, max_value=40, value=sd.get("marriage_yr", None), placeholder="Type here")
-            pr_opts   = ["No","Yes"]
-            pregnant  = c3.selectbox("Currently Pregnant?", pr_opts, index=pr_opts.index(sd.get("pregnant_label","No")))
-            abortions = c4.number_input("No. of Abortions", min_value=0, max_value=10, value=sd.get("abortions", None), placeholder="Type here")
+            field_label("Marriage Duration", "years", required=True)
+            marriage = st.number_input("Marriage Duration (years)", min_value=0, max_value=40,
+                                       value=sd.get("marriage_yr", None), placeholder="e.g. 3",
+                                       label_visibility="collapsed")
+            field_divider()
 
-            st.markdown("</div>", unsafe_allow_html=True)
-            back, nxt = nav_buttons("sec_2", 1, "Next — Laboratory Values")
+            field_label("Currently Pregnant?", required=True)
+            pr_opts  = ["No", "Yes"]
+            pregnant = st.selectbox("Currently Pregnant?", pr_opts,
+                                    index=pr_opts.index(sd.get("pregnant_label","No")),
+                                    label_visibility="collapsed")
+            field_divider()
+
+            field_label("No. of Abortions", required=True)
+            abortions = st.number_input("No. of Abortions", min_value=0, max_value=10,
+                                        value=sd.get("abortions", None), placeholder="e.g. 0",
+                                        label_visibility="collapsed")
+            field_divider()
+
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+            col_back, col_next = st.columns([1, 3])
+            with col_back:
+                back = st.form_submit_button("← Back", use_container_width=True)
+            with col_next:
+                nxt = st.form_submit_button("Next — Laboratory Values →", use_container_width=True)
 
         if nxt:
             missing = [f for f, v in [("Marriage Duration",marriage),("No. of Abortions",abortions)] if v is None]
             if missing:
-                st.error("Some fields are incomplete. Please review all inputs before continuing.")
+                st.error("Some fields are incomplete. Please fill all required fields before continuing.")
             else:
                 sd.update({
                     "cycle_ri_label": cycle_ri,
@@ -838,76 +995,160 @@ elif app_step == "form":
                 st.session_state.active_section = 3; st.rerun()
         if back: st.session_state.active_section = 1; st.rerun()
 
+    # ── Section 3 — Laboratory Values ────────────────────
     elif active_sec == 3:
+        st.markdown("""
+        <div class="f-card">
+          <div class="f-card-header">
+            <div class="f-card-num">04</div>
+            <div>
+              <div class="f-card-title">Laboratory Values</div>
+              <div class="f-card-desc">Beta-HCG I, AMH, and Random Blood Sugar</div>
+            </div>
+          </div>
+          <div class="f-card-body">
+        """, unsafe_allow_html=True)
+
         with st.form("sec_3"):
-            st.markdown("""<div class="section-card"><div class="section-header">
-                <div class="section-icon">04</div>
-                <div><div class="section-title">Laboratory Values</div>
-                <div class="section-desc">Beta-HCG I, AMH, and Random Blood Sugar</div></div>
-            </div>""", unsafe_allow_html=True)
+            field_label("Beta-HCG I", "mIU/mL", required=True)
+            beta_hcg_i = st.number_input("Beta-HCG I (mIU/mL)", min_value=0.0, max_value=500.0,
+                                         value=sd.get("beta_hcg_i", None), step=0.1,
+                                         placeholder="e.g. 1.2", label_visibility="collapsed")
+            field_divider()
 
-            c1, c2, c3 = st.columns(3)
-            beta_hcg_i = c1.number_input("Beta-HCG I (mIU/mL)",       min_value=0.0,  max_value=500.0, value=sd.get("beta_hcg_i", None), step=0.1, placeholder="Type here")
-            amh        = c2.number_input("AMH (ng/mL)",                min_value=0.0,  max_value=15.0,  value=sd.get("amh",        None), step=0.1, placeholder="Type here")
-            rbs        = c3.number_input("Random Blood Sugar (mg/dl)", min_value=50.0, max_value=400.0, value=sd.get("rbs",        None), step=1.0, placeholder="Type here")
+            field_label("AMH", "ng/mL", required=True)
+            amh = st.number_input("AMH (ng/mL)", min_value=0.0, max_value=15.0,
+                                  value=sd.get("amh", None), step=0.1,
+                                  placeholder="e.g. 4.5", label_visibility="collapsed")
+            field_divider()
 
-            st.markdown("</div>", unsafe_allow_html=True)
-            back, nxt = nav_buttons("sec_3", 2, "Next — Ultrasound Findings")
+            field_label("Random Blood Sugar", "mg/dl", required=True)
+            rbs = st.number_input("Random Blood Sugar (mg/dl)", min_value=50.0, max_value=400.0,
+                                  value=sd.get("rbs", None), step=1.0,
+                                  placeholder="e.g. 95.0", label_visibility="collapsed")
+            field_divider()
+
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+            col_back, col_next = st.columns([1, 3])
+            with col_back:
+                back = st.form_submit_button("← Back", use_container_width=True)
+            with col_next:
+                nxt = st.form_submit_button("Next — Ultrasound Findings →", use_container_width=True)
 
         if nxt:
             missing = [f for f, v in [("Beta-HCG I",beta_hcg_i),("AMH",amh),("Random Blood Sugar",rbs)] if v is None]
             if missing:
-                st.error("Some fields are incomplete. Please review all inputs before continuing.")
+                st.error("Some fields are incomplete. Please fill all required fields before continuing.")
             else:
                 sd.update({"beta_hcg_i":beta_hcg_i, "amh":amh, "rbs":rbs})
                 st.session_state.active_section = 4; st.rerun()
         if back: st.session_state.active_section = 2; st.rerun()
 
+    # ── Section 4 — Ultrasound ────────────────────────────
     elif active_sec == 4:
+        st.markdown("""
+        <div class="f-card">
+          <div class="f-card-header">
+            <div class="f-card-num">05</div>
+            <div>
+              <div class="f-card-title">Ultrasound Findings</div>
+              <div class="f-card-desc">Antral follicle count for left and right ovary</div>
+            </div>
+          </div>
+          <div class="f-card-body">
+        """, unsafe_allow_html=True)
+
         with st.form("sec_4"):
-            st.markdown("""<div class="section-card"><div class="section-header">
-                <div class="section-icon">05</div>
-                <div><div class="section-title">Ultrasound Findings</div>
-                <div class="section-desc">Antral follicle count for left and right ovary</div></div>
-            </div>""", unsafe_allow_html=True)
+            field_label("Follicle No. — Left Ovary", required=True)
+            follicle_l = st.number_input("Follicle No. (Left Ovary)", min_value=0, max_value=30,
+                                         value=sd.get("follicle_l", None), placeholder="e.g. 10",
+                                         label_visibility="collapsed")
+            field_divider()
 
-            c1, c2 = st.columns(2)
-            follicle_l = c1.number_input("Follicle No. (Left Ovary)",  min_value=0, max_value=30, value=sd.get("follicle_l", None), placeholder="Type here")
-            follicle_r = c2.number_input("Follicle No. (Right Ovary)", min_value=0, max_value=30, value=sd.get("follicle_r", None), placeholder="Type here")
+            field_label("Follicle No. — Right Ovary", required=True)
+            follicle_r = st.number_input("Follicle No. (Right Ovary)", min_value=0, max_value=30,
+                                         value=sd.get("follicle_r", None), placeholder="e.g. 11",
+                                         label_visibility="collapsed")
+            field_divider()
 
-            st.markdown("</div>", unsafe_allow_html=True)
-            back, nxt = nav_buttons("sec_4", 3, "Next — Clinical Symptoms")
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+            col_back, col_next = st.columns([1, 3])
+            with col_back:
+                back = st.form_submit_button("← Back", use_container_width=True)
+            with col_next:
+                nxt = st.form_submit_button("Next — Clinical Symptoms →", use_container_width=True)
 
         if nxt:
             missing = [f for f, v in [("Follicle No. Left",follicle_l),("Follicle No. Right",follicle_r)] if v is None]
             if missing:
-                st.error("Some fields are incomplete. Please review all inputs before continuing.")
+                st.error("Some fields are incomplete. Please fill all required fields before continuing.")
             else:
                 sd.update({"follicle_l":follicle_l, "follicle_r":follicle_r})
                 st.session_state.active_section = 5; st.rerun()
         if back: st.session_state.active_section = 3; st.rerun()
 
+    # ── Section 5 — Clinical Symptoms ────────────────────
     elif active_sec == 5:
+        st.markdown("""
+        <div class="f-card">
+          <div class="f-card-header">
+            <div class="f-card-num">06</div>
+            <div>
+              <div class="f-card-title">Clinical Symptoms</div>
+              <div class="f-card-desc">Self-reported signs and lifestyle factors</div>
+            </div>
+          </div>
+          <div class="f-card-body">
+        """, unsafe_allow_html=True)
+
         with st.form("sec_5"):
-            st.markdown("""<div class="section-card"><div class="section-header">
-                <div class="section-icon">06</div>
-                <div><div class="section-title">Clinical Symptoms</div>
-                <div class="section-desc">Self-reported signs and lifestyle factors</div></div>
-            </div>""", unsafe_allow_html=True)
+            yn = ["No", "Yes"]
 
-            c1, c2, c3 = st.columns(3)
-            yn          = ["No","Yes"]
-            weight_gain = c1.radio("Weight Gain?",        yn, index=yn.index(sd.get("weight_gain_label","No")), horizontal=True)
-            hair_growth = c2.radio("Excess Hair Growth?", yn, index=yn.index(sd.get("hair_growth_label","No")), horizontal=True)
-            pimples     = c3.radio("Pimples / Acne?",     yn, index=yn.index(sd.get("pimples_label","No")),     horizontal=True)
+            field_label("Weight Gain?", required=True)
+            weight_gain = st.radio("Weight Gain?", yn,
+                                   index=yn.index(sd.get("weight_gain_label","No")),
+                                   horizontal=True, label_visibility="collapsed")
+            field_divider()
 
-            c1, c2, c3 = st.columns(3)
-            fast_food = c1.radio("Fast Food (regularly)?", yn, index=yn.index(sd.get("fast_food_label","No")), horizontal=True)
-            exercise  = c2.radio("Regular Exercise?",      yn, index=yn.index(sd.get("exercise_label","No")),  horizontal=True)
-            skin_dark = c3.radio("Skin Darkening?",        yn, index=yn.index(sd.get("skin_dark_label","No")), horizontal=True)
+            field_label("Excess Hair Growth?", required=True)
+            hair_growth = st.radio("Excess Hair Growth?", yn,
+                                   index=yn.index(sd.get("hair_growth_label","No")),
+                                   horizontal=True, label_visibility="collapsed")
+            field_divider()
 
-            st.markdown("</div>", unsafe_allow_html=True)
-            back, nxt = nav_buttons("sec_5", 4, "Run Diagnostic")
+            field_label("Pimples / Acne?", required=True)
+            pimples = st.radio("Pimples / Acne?", yn,
+                               index=yn.index(sd.get("pimples_label","No")),
+                               horizontal=True, label_visibility="collapsed")
+            field_divider()
+
+            field_label("Skin Darkening?", required=True)
+            skin_dark = st.radio("Skin Darkening?", yn,
+                                 index=yn.index(sd.get("skin_dark_label","No")),
+                                 horizontal=True, label_visibility="collapsed")
+            field_divider()
+
+            field_label("Fast Food (regularly)?", required=True)
+            fast_food = st.radio("Fast Food (regularly)?", yn,
+                                 index=yn.index(sd.get("fast_food_label","No")),
+                                 horizontal=True, label_visibility="collapsed")
+            field_divider()
+
+            field_label("Regular Exercise?", required=True)
+            exercise = st.radio("Regular Exercise?", yn,
+                                index=yn.index(sd.get("exercise_label","No")),
+                                horizontal=True, label_visibility="collapsed")
+            field_divider()
+
+            st.markdown('</div></div>', unsafe_allow_html=True)
+
+            col_back, col_next = st.columns([1, 3])
+            with col_back:
+                back = st.form_submit_button("← Back", use_container_width=True)
+            with col_next:
+                nxt = st.form_submit_button("Run Diagnostic →", use_container_width=True)
 
         if nxt:
             sd.update({
@@ -919,7 +1160,6 @@ elif app_step == "form":
                 "exercise_label":    exercise,    "exercise":       1 if exercise=="Yes"    else 0,
             })
             s = sd
-
             inp = {
                 "age":                   s["age"],
                 "weight":                s["weight"],
@@ -967,6 +1207,7 @@ elif app_step == "form":
             st.rerun()
 
         if back: st.session_state.active_section = 4; st.rerun()
+
 
 # ─────────────────────────────────────────────────────────
 # RESULT PAGE
@@ -1138,6 +1379,7 @@ elif app_step == "result":
         and must be confirmed by a licensed healthcare professional. Rotterdam criteria are applied to
         self-reported and entered clinical data only.</div>""", unsafe_allow_html=True)
 
+
 # ─────────────────────────────────────────────────────────
 # DASHBOARD
 # ─────────────────────────────────────────────────────────
@@ -1159,16 +1401,14 @@ elif app_step == "dashboard":
     FONT_SORA = "Sora, sans-serif"
     FONT_CG   = "Cormorant Garamond, serif"
 
-    # Purple palette for charts — FIX Q1
-    C_PUR_DARK   = "#4a1fa8"   # deep anchor
-    C_PUR_MID    = "#6c3fc5"   # primary
-    C_PUR_BRIGHT = "#9b6fe8"   # mid accent
-    C_PUR_LIGHT  = "#c4a8f5"   # light
-    C_PUR_GHOST  = "#ede6f5"   # background tint
+    C_PUR_DARK   = "#4a1fa8"
+    C_PUR_MID    = "#6c3fc5"
+    C_PUR_BRIGHT = "#9b6fe8"
+    C_PUR_LIGHT  = "#c4a8f5"
+    C_PUR_GHOST  = "#ede6f5"
 
-    # Waterfall colours stay red/blue for direction clarity, but use purple for neutral lines
-    C_WF_POS  = "#7c3aed"   # purple-positive (toward phenotype)
-    C_WF_NEG  = "#be185d"   # rose-negative (away from phenotype)
+    C_WF_POS = "#7c3aed"
+    C_WF_NEG = "#be185d"
 
     BASE_LAYOUT = dict(
         paper_bgcolor="rgba(0,0,0,0)",
@@ -1196,7 +1436,6 @@ elif app_step == "dashboard":
         if v < lo:    return C_LOW
         return C_OK
 
-    # ── Rotterdam summary strip ───────────────────────────
     def crit_mini(label, met, detail):
         if met:
             bg, border, icon = "rgba(108,63,197,0.08)","#7c52cc","✓"
@@ -1232,7 +1471,6 @@ elif app_step == "dashboard":
         unsafe_allow_html=True,
     )
 
-    # ── KPI strip — FIX Q4: use fmt_kpi instead of :.2g ──
     section_label("Key Biomarkers")
     KPI_DEF = [
         ("BMI",       sd.get("bmi",        0) or 0, 18.5,  24.9,  "kg/m²"),
@@ -1245,7 +1483,7 @@ elif app_step == "dashboard":
     def kpi_html(label, val, lo, hi, unit):
         color   = val_status(val, lo, hi)
         arrow   = " ↑" if val > hi else (" ↓" if val < lo else "")
-        display = fmt_kpi(val)   # ← FIXED: no more :.2g truncation
+        display = fmt_kpi(val)
         return (
             f'<div style="background:#ffffff;border:1px solid {C_BORDER};border-radius:10px;'
             f'padding:0.8rem 0.6rem;text-align:center;height:100%;">'
@@ -1276,7 +1514,6 @@ elif app_step == "dashboard":
         donut_labels = list(sorted_probs.keys())
         donut_vals   = list(sorted_probs.values())
 
-        # ── FIX Q3: textinfo="none", annotations only inside hole ──
         fig_donut = go.Figure(go.Pie(
             labels=donut_labels,
             values=donut_vals,
@@ -1285,7 +1522,7 @@ elif app_step == "dashboard":
                 colors=[ph_colors[k] for k in donut_labels],
                 line=dict(color="#faf8fe", width=3),
             ),
-            textinfo="none",          # ← no slice labels at all — eliminates overlap
+            textinfo="none",
             hovertemplate=(
                 "<b>Phenotype %{label}</b><br>"
                 "%{customdata}<br>"
@@ -1297,7 +1534,6 @@ elif app_step == "dashboard":
             rotation=270,
             showlegend=False,
         ))
-        # Centre annotations — phenotype letter, %, sublabel
         fig_donut.add_annotation(
             text=f"<b>{ph}</b>",
             x=0.5, y=0.58,
@@ -1307,7 +1543,7 @@ elif app_step == "dashboard":
         fig_donut.add_annotation(
             text=f"{int(probs[ph]*100)}%",
             x=0.5, y=0.43,
-            font=dict(family=FONT_SORA, size=13, color=info["color"], ),
+            font=dict(family=FONT_SORA, size=13, color=info["color"]),
             showarrow=False, xref="paper", yref="paper",
         )
         fig_donut.add_annotation(
@@ -1323,7 +1559,6 @@ elif app_step == "dashboard":
         )
         st.plotly_chart(fig_donut, use_container_width=True, config={"displayModeBar": False})
 
-        # Legend below donut
         legend_html = '<div style="display:flex;flex-wrap:wrap;gap:0.4rem;justify-content:center;margin-top:-0.3rem;">'
         for k in ["A","B","C","D"]:
             bold = "font-weight:700;" if k == ph else "opacity:0.6;"
@@ -1432,8 +1667,8 @@ elif app_step == "dashboard":
             feat_vals  = [inp.get(c, None) for c in P2_FEATURES
                           if c in [P2_FEATURES[i] for i in p2_model.named_steps["tomim"].selected_idx_]]
 
-            paired   = sorted(zip(raw_shap, feat_names, feat_vals), key=lambda x: abs(x[0]), reverse=True)[:10]
-            paired   = list(reversed(paired))
+            paired = sorted(zip(raw_shap, feat_names, feat_vals), key=lambda x: abs(x[0]), reverse=True)[:10]
+            paired = list(reversed(paired))
 
             shap_data = json.dumps([
                 {"shap": round(s, 4), "label": l, "val": round(float(v), 3) if v is not None else None}
@@ -1442,7 +1677,6 @@ elif app_step == "dashboard":
             ph_color  = ph_colors[ph]
             pred_prob = int(probs[ph] * 100)
 
-            # ── FIX Q1: Waterfall uses purple palette ──────
             WATERFALL_HTML = f"""
 <style>
   .wf-wrap {{
@@ -1552,7 +1786,6 @@ elif app_step == "dashboard":
 (function() {{
   var data    = {shap_data};
   var baseVal = {round(base_val, 4)};
-  // Purple for positive SHAP, rose for negative — both harmonious with the purple UI
   var POS_CLR = "#6c3fc5";
   var NEG_CLR = "#be185d";
   var chart   = document.getElementById('wf-chart');
@@ -1570,7 +1803,6 @@ elif app_step == "dashboard":
 
   function toX(v) {{ return ((v - minVal) / range * SCALE) + 2; }}
 
-  // Baseline
   var blRow = document.createElement('div');
   blRow.className = 'wf-baseline-row';
   blRow.innerHTML =
@@ -1582,7 +1814,6 @@ elif app_step == "dashboard":
     '<div style="font-size:10.5px;color:#9580b8;font-weight:600;">' + baseVal.toFixed(3) + '</div>';
   chart.appendChild(blRow);
 
-  // Feature rows
   data.forEach(function(d, i) {{
     var startX = toX(snapshots[i]);
     var endX   = toX(snapshots[i] + d.shap);
@@ -1610,7 +1841,6 @@ elif app_step == "dashboard":
     chart.appendChild(row);
   }});
 
-  // f(x) row
   var fxRow = document.createElement('div');
   fxRow.className = 'wf-fx-row';
   fxRow.innerHTML =
@@ -1646,17 +1876,16 @@ elif app_step == "dashboard":
                 unsafe_allow_html=True,
             )
 
-    # ── RADAR — FIX Q1: full purple palette ───────────────
     with col_radar:
         section_label("Biomarker Radar")
         radar_defs = [
             ("AMH",         sd.get("amh",        0) or 0,  1.0,  3.5,   "ng/mL"),
-            ("BMI",         sd.get("bmi",        0) or 0,  18.5, 24.9,  "kg/m²"),
+            ("BMI",         sd.get("bmi",        0) or 0, 18.5, 24.9,   "kg/m²"),
             ("Waist:Hip",   sd.get("whr",        0) or 0,  0.0,  0.85,  "ratio"),
-            ("RBS",         sd.get("rbs",        0) or 0,  70.0, 140.0, "mg/dl"),
+            ("RBS",         sd.get("rbs",        0) or 0, 70.0, 140.0,  "mg/dl"),
             ("β-HCG I",     sd.get("beta_hcg_i",0) or 0,  0.0,  5.0,   "mIU/mL"),
-            ("Follicles L", sd.get("follicle_l", 0) or 0,  0.0,  12.0,  "count"),
-            ("Follicles R", sd.get("follicle_r", 0) or 0,  0.0,  12.0,  "count"),
+            ("Follicles L", sd.get("follicle_l", 0) or 0,  0.0, 12.0,   "count"),
+            ("Follicles R", sd.get("follicle_r", 0) or 0,  0.0, 12.0,   "count"),
         ]
 
         r_labels = [d[0] for d in radar_defs]
@@ -1680,29 +1909,24 @@ elif app_step == "dashboard":
         r_vals_closed   = r_vals   + [r_vals[0]]
         r_hover_closed  = r_hover  + [r_hover[0]]
 
-        any_high = any(norm_radar(d[1], d[2], d[3]) > 100 for d in radar_defs)
-
-        # Always purple — elevated areas use a deeper/more saturated purple
+        any_high   = any(norm_radar(d[1], d[2], d[3]) > 100 for d in radar_defs)
         fill_color = "rgba(124,58,237,0.18)" if any_high else "rgba(108,63,197,0.13)"
         line_color = "#7c3aed" if any_high else C_PURPLE
         marker_clr = "#9b6fe8"
 
         fig_radar = go.Figure()
-        # Dotted reference ring
         fig_radar.add_trace(go.Scatterpolar(
             r=[100] * len(r_labels_closed), theta=r_labels_closed,
             fill=None, mode="lines",
             line=dict(color=C_PUR_LIGHT, width=1.5, dash="dot"),
             name="Upper normal limit", hoverinfo="skip", showlegend=True,
         ))
-        # Patient data
         fig_radar.add_trace(go.Scatterpolar(
             r=r_vals_closed, theta=r_labels_closed,
             fill="toself", fillcolor=fill_color,
             mode="lines+markers",
             line=dict(color=line_color, width=2.5),
-            marker=dict(size=6, color=marker_clr,
-                        line=dict(color="#ffffff", width=1.5)),
+            marker=dict(size=6, color=marker_clr, line=dict(color="#ffffff", width=1.5)),
             name="Patient values",
             text=r_hover_closed,
             hovertemplate="%{text}<extra></extra>",
@@ -1748,7 +1972,6 @@ elif app_step == "dashboard":
     st.markdown("<div style='height:2rem'></div>", unsafe_allow_html=True)
 
     # ── ROW 3: Follicle bar | Driver bar ──────────────────
-    # ── FIX Q2: Driver features now come from SHAP p2_model ──
     section_label("Ultrasound & Clinical Thresholds")
     col_foll, col_sym = st.columns(2, gap="large")
 
@@ -1780,7 +2003,6 @@ elif app_step == "dashboard":
         st.plotly_chart(fig_foll, use_container_width=True, config={"displayModeBar": False})
 
     with col_sym:
-        # ── SHAP-driven phenotype driver features ─────────
         section_label("Phenotype Driver Features (SHAP-ranked)")
 
         with st.spinner(""):
@@ -1793,19 +2015,15 @@ elif app_step == "dashboard":
 
         drv_labels = [d[0] for d in driver_features]
         drv_raw    = [d[1] for d in driver_features]
-        drv_shap   = [d[2] for d in driver_features]  # None if fallback
+        drv_shap   = [d[2] for d in driver_features]
         drv_ref    = [d[3] for d in driver_features]
 
-        # Build display: if SHAP available show SHAP magnitude bars, else % of threshold
         if is_shap and all(s is not None for s in drv_shap):
-            max_abs = max(abs(s) for s in drv_shap) or 1
-            drv_pct = [abs(s) / max_abs * 100 for s in drv_shap]
-            drv_colors = [
-                C_PUR_MID if s >= 0 else C_PUR_BRIGHT
-                for s in drv_shap
-            ]
-            x_title = "SHAP importance (normalised)"
-            hover_sfx = [f"SHAP: {'+' if s>=0 else ''}{s:.4f}" for s in drv_shap]
+            max_abs    = max(abs(s) for s in drv_shap) or 1
+            drv_pct    = [abs(s) / max_abs * 100 for s in drv_shap]
+            drv_colors = [C_PUR_MID if s >= 0 else C_PUR_BRIGHT for s in drv_shap]
+            x_title    = "SHAP importance (normalised)"
+            hover_sfx  = [f"SHAP: {'+' if s>=0 else ''}{s:.4f}" for s in drv_shap]
         else:
             drv_pct    = [min(v / r * 100, 160) if r else 0 for v, r in zip(drv_raw, drv_ref)]
             drv_colors = [C_PUR_MID if p >= 100 else f"rgba(108,63,197,{max(0.25, p/100*0.7):.2f})"
@@ -1815,10 +2033,7 @@ elif app_step == "dashboard":
 
         fig_drv = go.Figure()
 
-        if is_shap:
-            # No threshold line for SHAP view
-            pass
-        else:
+        if not is_shap:
             fig_drv.add_vline(x=100, line=dict(color=C_MUTED, width=1.2, dash="dot"),
                 annotation_text="threshold", annotation_position="top right",
                 annotation_font=dict(size=8, color=C_MUTED))
@@ -1889,9 +2104,9 @@ elif app_step == "dashboard":
             "Symptoms":       ["weight_gain_label","hair_growth_label","skin_dark_label","pimples_label","fast_food_label","exercise_label"],
         }
         RANGES = {
-            "bmi":(18.5,24.9),"whr":(0,0.85),
-            "amh":(1,3.5),"rbs":(70,140),
-            "pulse":(60,100),"bp_sys":(90,120),"bp_dia":(60,80),
+            "bmi":(18.5,24.9), "whr":(0,0.85),
+            "amh":(1,3.5), "rbs":(70,140),
+            "pulse":(60,100), "bp_sys":(90,120), "bp_dia":(60,80),
         }
         for sec_title, keys in SECS.items():
             items = {k: sd[k] for k in keys if k in sd}
