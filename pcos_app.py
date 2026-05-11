@@ -1199,7 +1199,7 @@ elif app_step == "form":
 
             if pcos_positive:
                 ph_ml, probs = predict_phenotype(inp)
-                st.session_state.phenotype_result = (rule_phenotype, probs)
+                st.session_state.phenotype_result = (ph_ml, probs)
             else:
                 st.session_state.phenotype_result = None
 
