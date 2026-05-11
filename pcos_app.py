@@ -381,7 +381,7 @@ def _pipeline_stages(rule_state, p2_state, dash_state="locked"):
             f'</div>'
         )
     html  = '<div class="pipeline-label">Diagnostic Pipeline</div>'
-    html += stage("01", "Rotterdam Rules",          "Criteria-based PCOS detection", rule_state)
+    html += stage("01", "PCOS Detection",          "Criteria-based PCOS detection", rule_state)
     html += stage("02", "Phenotype Classification", "Types A / B / C / D",           p2_state)
     html += stage("03", "Clinical Dashboard",       "Charts, importance & summary",  dash_state)
     st.markdown(html, unsafe_allow_html=True)
@@ -542,7 +542,7 @@ if app_step == "overview":
         '</p>'
         '<p class="ov-box-body" style="margin-top:0.7rem;">'
         'This tool uses a <strong>two-stage approach</strong>: '
-        '<span class="ov-inline-pill">Stage 1 — Rotterdam Rules</span> applies the official clinical '
+        '<span class="ov-inline-pill">Stage 1 — PCOS Detection</span> applies the official clinical '
         'criteria to determine whether PCOS is present and which phenotype best fits the data. '
         '<span class="ov-inline-pill">Stage 2 — ML Model</span> then confirms and refines the '
         'phenotype classification using a trained Random Forest pipeline, with confidence scores and a '
